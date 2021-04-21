@@ -12,8 +12,7 @@
 *.out
 
 bin/
-bundle/
-runtime/
-store/
-systemd/
-utils/
+
+
+# Logs
+*.log
