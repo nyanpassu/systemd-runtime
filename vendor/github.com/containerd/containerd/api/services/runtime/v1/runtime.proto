@@ -1,0 +1,203 @@
+syntax = "proto3";
+
+package containerd.services.runtime.v1;
+
+import "google/protobuf/empty.proto";
+import "google/protobuf/any.proto";
+import weak "gogoproto/gogo.proto";
+import "github.com/containerd/containerd/api/types/mount.proto";
+import "github.com/containerd/containerd/api/types/metrics.proto";
+import "github.com/containerd/containerd/api/types/descriptor.proto";
+import "github.com/containerd/containerd/api/types/task/task.proto";
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/containerd/containerd/api/services/runtime/v1;runtime";
+
+service PlatformRuntime {
+	// Create a task.
+	rpc Create(CreateTaskRequest) returns (CreateTaskResponse);
+  // Get a task.
+	rpc Get(GetTaskRequest) returns (GetTaskResponse);
+  // List tasks.
+	rpc List(ListTasksRequest) returns (ListTasksResponse);
+	// List task pids.
+	rpc Pids(PidsRequest) returns (PidsResponse);
+	// Pause task.
+	rpc Pause(PauseTaskRequest) returns (google.protobuf.Empty);
+	// Resume task.
+	rpc Resume(ResumeTaskRequest) returns (google.protobuf.Empty);
+	// Get status.
+	rpc State(StateRequest) returns (StateResponse);
+	// Start.
+	rpc Start(StartRequest) returns (StartResponse);
+	// Delete.
+	rpc Delete(DeleteRequest) returns (DeleteResponse);
+	// Create task checkpoint.
+	rpc Checkpoint(CheckpointTaskRequest) returns (google.protobuf.Empty);
+	// Kill task or process.
+	rpc Kill(KillRequest) returns (google.protobuf.Empty);
+	// Exec Process.
+	rpc Exec(ExecProcessRequest) returns (google.protobuf.Empty);
+	// Resize pty.
+	rpc ResizePty(ResizePtyRequest) returns (google.protobuf.Empty);
+	// Close IO.
+	rpc CloseIO(CloseIORequest) returns (google.protobuf.Empty);
+	// Update.
+	rpc Update(UpdateTaskRequest) returns (google.protobuf.Empty);
+	// Wait.
+	rpc Wait(WaitRequest) returns (WaitResponse);
+	// Stats.
+	rpc Stats(StatsRequest) returns (StatsResponse);
+}
+
+message CreateTaskRequest {
+  string id = 1;
+	string bundle = 2;
+	repeated containerd.types.Mount rootfs = 3;
+	bool terminal = 4;
+	string stdin = 5;
+	string stdout = 6;
+	string stderr = 7;
+	string checkpoint = 8;
+  string namespace = 9;
+	google.protobuf.Any task_options = 10;
+}
+
+message CreateTaskResponse {
+	uint32 pid = 2;
+}
+
+message TaskProcess {
+  string namespace = 1;
+  containerd.v1.types.Process process = 2;
+}
+
+message GetTaskRequest {
+	string id = 1;
+}
+
+message GetTaskResponse {
+	TaskProcess task = 1;
+}
+
+message ListTasksRequest {
+  string namespace = 1;
+}
+
+message ListTasksResponse {
+	repeated TaskProcess tasks = 1;
+}
+
+message DeleteRequest {
+	string id = 1;
+	string exec_id = 2;
+}
+
+message DeleteResponse {
+	uint32 pid = 1;
+	uint32 exit_status = 2;
+	google.protobuf.Timestamp exited_at = 3 [(gogoproto.stdtime) = true, (gogoproto.nullable) = false];
+}
+
+message ExecProcessRequest {
+	string id = 1;
+	string exec_id = 2;
+	bool terminal = 3;
+	string stdin = 4;
+	string stdout = 5;
+	string stderr = 6;
+	google.protobuf.Any spec = 7;
+}
+
+message ExecProcessResponse {
+}
+
+message ResizePtyRequest {
+	string id = 1;
+	string exec_id = 2;
+	uint32 width = 3;
+	uint32 height = 4;
+}
+
+message StateRequest {
+	string id = 1;
+	string exec_id = 2;
+}
+
+message StateResponse {
+	containerd.v1.types.Status status = 1;
+	uint32 pid = 2;
+	uint32 exit_status = 3;
+	google.protobuf.Timestamp exited_at = 4 [(gogoproto.stdtime) = true, (gogoproto.nullable) = false];
+	string stdin = 5;
+	string stdout = 6;
+	string stderr = 7;
+	bool terminal = 8;
+}
+
+message KillRequest {
+	string id = 1;
+	string exec_id = 2;
+	uint32 signal = 3;
+	bool all = 4;
+}
+
+message CloseIORequest {
+	string id = 1;
+	string exec_id = 2;
+	bool stdin = 3;
+}
+
+message PidsRequest {
+	string id = 1;
+}
+
+message PidsResponse {
+	repeated containerd.v1.types.ProcessInfo processes = 1;
+}
+
+message CheckpointTaskRequest {
+	string id = 1;
+	string path = 2;
+	google.protobuf.Any options = 3;
+}
+
+message UpdateTaskRequest {
+	string id = 1;
+	google.protobuf.Any resources = 2;
+}
+
+message StartRequest {
+	string id = 1;
+	string exec_id = 2;
+}
+
+message StartResponse {
+	uint32 pid = 1;
+}
+
+message WaitRequest {
+	string id = 1;
+	string exec_id = 2;
+}
+
+message WaitResponse {
+	uint32 exit_status = 1;
+	google.protobuf.Timestamp exited_at = 2 [(gogoproto.stdtime) = true, (gogoproto.nullable) = false];
+}
+
+message StatsRequest {
+	string id = 1;
+}
+
+message StatsResponse {
+	google.protobuf.Any stats = 1;
+}
+
+message PauseTaskRequest {
+	string id = 1;
+}
+
+message ResumeTaskRequest {
+	string id = 1;
+}
