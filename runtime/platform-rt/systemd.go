@@ -9,11 +9,11 @@ import (
 func detail(b task.Bundle) systemd.Detail {
 	return systemd.Detail{
 		Unit: systemd.UnitSector{
-			Description: "",
+			Description: "EruSystemdUnit-" + b.ID(),
 		},
 		Service: systemd.ServiceSector{
-			Type:      "",
-			ExecStart: []string{task.ShimBinaryName, ""},
+			Type:      "fork",
+			ExecStart: []string{task.ShimBinaryName},
 		},
 		Install: systemd.InstallSector{
 			WantedBy: "multi-user.target",
