@@ -20,15 +20,16 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"runtime"
 	"runtime/debug"
 	"strings"
 	"time"
 
+	"github.com/containerd/containerd/events"
 	"github.com/containerd/containerd/log"
 	"github.com/containerd/containerd/namespaces"
-	"github.com/containerd/containerd/runtime/v2/shim"
 	shimapi "github.com/containerd/containerd/runtime/v2/task"
 	"github.com/containerd/containerd/version"
 	"github.com/containerd/ttrpc"
@@ -44,8 +45,21 @@ type Client struct {
 	signals chan os.Signal
 }
 
+// Publisher for events
+type Publisher interface {
+	events.Publisher
+	io.Closer
+}
+
 // Init func for the creation of a shim server
-type Init func(context.Context, string, shim.Publisher, func()) (shim.Shim, error)
+type Init func(context.Context, string, Publisher, func()) (Shim, error)
+
+// Shim server interface
+type Shim interface {
+	shimapi.TaskService
+	Cleanup(ctx context.Context) (*shimapi.DeleteResponse, error)
+	StartShim(ctx context.Context, id, containerdBinary, containerdAddress, containerdTTRPCAddress string) (string, error)
+}
 
 // OptsKey is the context key for the Opts value.
 type OptsKey struct{}
@@ -204,16 +218,12 @@ func run(id string, initFunc Init, config Config) error {
 			return err
 		}
 		return nil
-	case "start":
-		address, err := service.StartShim(ctx, idFlag, containerdBinaryFlag, addressFlag, ttrpcAddress)
+	default:
+		_, err := service.StartShim(ctx, idFlag, containerdBinaryFlag, addressFlag, ttrpcAddress)
 		if err != nil {
 			return err
 		}
-		if _, err := os.Stdout.WriteString(address); err != nil {
-			return err
-		}
-		return nil
-	default:
+
 		if !config.NoSetupLogger {
 			if err := setLogger(ctx, idFlag); err != nil {
 				return err

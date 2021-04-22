@@ -9,7 +9,7 @@ import (
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 
 	"github.com/projecteru2/systemd-runtime/runtime"
-	shimPlatform "github.com/projecteru2/systemd-runtime/runtime/shim"
+	shimPlatform "github.com/projecteru2/systemd-runtime/runtime/shim/containerd"
 )
 
 func Register() {

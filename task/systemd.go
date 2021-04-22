@@ -1,4 +1,4 @@
-package runtime
+package task
 
 const prefix = "eru-systemd-"
 

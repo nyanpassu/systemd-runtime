@@ -1,4 +1,4 @@
-package stdio
+package shim
 
 // Stdio of a process
 type Stdio struct {

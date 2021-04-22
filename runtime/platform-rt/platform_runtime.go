@@ -1,4 +1,4 @@
-package shim
+package containerd
 
 import (
 	"context"
@@ -10,9 +10,9 @@ import (
 	"github.com/containerd/containerd/runtime"
 	"github.com/nyanpassu/containerd-eru-runtime-plugin/common"
 
-	systemdRuntime "github.com/projecteru2/systemd-runtime/runtime"
 	"github.com/projecteru2/systemd-runtime/store"
 	"github.com/projecteru2/systemd-runtime/systemd"
+	"github.com/projecteru2/systemd-runtime/task"
 )
 
 // Config for the v2 runtime
@@ -55,7 +55,7 @@ type taskManager struct {
 	cs containers.Store
 	ts store.TaskStore
 	um systemd.UnitManager
-	tb systemdRuntime.TaskBuilder
+	tb task.TaskBuilder
 }
 
 // ID of the runtime
@@ -83,44 +83,44 @@ func (m *taskManager) Create(ctx context.Context, id string, opts runtime.Create
 		topts = opts.RuntimeOptions
 	}
 
-	task := store.Task{
+	t := store.Task{
 		ID:         id,
 		BundlePath: bundle.Path(),
 		Namespace:  bundle.Namespace(),
 	}
-	if err = m.ts.Create(ctx, &task); err != nil {
+	if err = m.ts.Create(ctx, &t); err != nil {
 		return nil, err
 	}
 
-	unit, err := m.um.Create(ctx, systemdRuntime.UnitName(id), detail(bundle))
+	unit, err := m.um.Create(ctx, task.UnitName(id), detail(bundle))
 	if err != nil {
 		return nil, err
 	}
 
-	t, err := m.tb.CreateNewTask(ctx, task, unit)
+	ta, err := m.tb.CreateNewTask(ctx, t, unit)
 	if err != nil {
 		return nil, err
 	}
-	return t, nil
+	return ta, nil
 }
 
 // Get returns a task.
 func (m *taskManager) Get(ctx context.Context, id string) (runtime.Task, error) {
-	task := store.Task{ID: id}
-	if err := m.ts.Retrieve(ctx, &task); err != nil {
+	t := store.Task{ID: id}
+	if err := m.ts.Retrieve(ctx, &t); err != nil {
 		return nil, err
 	}
 
-	u, err := m.um.Get(ctx, systemdRuntime.UnitName(id))
+	u, err := m.um.Get(ctx, task.UnitName(id))
 	if err != nil {
 		return nil, err
 	}
 
-	t, err := m.tb.CreateFromRecord(ctx, task, u)
+	ta, err := m.tb.CreateFromRecord(ctx, t, u)
 	if err != nil {
 		return nil, err
 	}
-	return t, nil
+	return ta, nil
 }
 
 // Tasks returns all the current tasks for the runtime.
@@ -146,7 +146,7 @@ func (m *taskManager) Tasks(ctx context.Context, all bool) ([]runtime.Task, erro
 	}
 	var ts []runtime.Task
 	for _, t := range tasks {
-		u, err := m.um.Get(ctx, systemdRuntime.UnitName(t.ID))
+		u, err := m.um.Get(ctx, task.UnitName(t.ID))
 		if err != nil {
 			return nil, err
 		}

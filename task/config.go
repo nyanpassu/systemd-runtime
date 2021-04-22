@@ -1,4 +1,4 @@
-package runtime
+package task
 
 // Config for the v2 runtime
 type Config struct {

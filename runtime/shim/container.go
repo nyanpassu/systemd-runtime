@@ -1,4 +1,4 @@
-package container
+package shim
 
 import (
 	"context"
@@ -14,7 +14,7 @@ import (
 	"github.com/containerd/containerd/runtime/v2/runc/options"
 	taskAPI "github.com/containerd/containerd/runtime/v2/task"
 
-	"github.com/projecteru2/systemd-runtime/runtime/v2/runc"
+	"github.com/projecteru2/systemd-runtime/runtime/shim/runc"
 )
 
 const optionsFilename = "options.json"
@@ -41,7 +41,7 @@ type Container struct {
 }
 
 // NewContainer returns a new runc container
-func NewContainer(ctx context.Context, runtime runc.Runc, r *taskAPI.CreateTaskRequest) (*Container, error) {
+func newContainer(ctx context.Context, runtime runc.Runc, r *taskAPI.CreateTaskRequest) (*Container, error) {
 	// ns, err := namespaces.NamespaceRequired(ctx)
 	// if err != nil {
 	// 	return nil, errors.Maskf(err, "create namespace")

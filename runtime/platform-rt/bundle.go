@@ -1,4 +1,4 @@
-package shim
+package containerd
 
 import (
 	"context"
@@ -11,10 +11,10 @@ import (
 	"github.com/containerd/containerd/runtime"
 	"github.com/pkg/errors"
 
-	systemdRuntime "github.com/projecteru2/systemd-runtime/runtime"
+	"github.com/projecteru2/systemd-runtime/task"
 )
 
-func newBundle(ctx context.Context, root, state, id string, spec []byte) (systemdRuntime.Bundle, error) {
+func newBundle(ctx context.Context, root, state, id string, spec []byte) (task.Bundle, error) {
 	if err := identifiers.Validate(id); err != nil {
 		return nil, errors.Wrapf(err, "invalid task id %s", id)
 	}
@@ -69,7 +69,7 @@ func newBundle(ctx context.Context, root, state, id string, spec []byte) (system
 		return nil, err
 	}
 	// write the spec to the bundle
-	err = ioutil.WriteFile(filepath.Join(b.path, systemdRuntime.ConfigFilename), spec, 0666)
+	err = ioutil.WriteFile(filepath.Join(b.path, task.ConfigFilename), spec, 0666)
 	return b, err
 }
 
@@ -84,7 +84,7 @@ func (b *bundle) ID() string {
 }
 
 func (b *bundle) Delete() error {
-	return systemdRuntime.DeletePath(b.path)
+	return task.DeletePath(b.path)
 }
 
 func (b *bundle) Path() string {
@@ -96,9 +96,9 @@ func (b *bundle) Namespace() string {
 }
 
 func (b *bundle) SaveOpts(ctx context.Context, opts runtime.CreateOpts) error {
-	return systemdRuntime.SaveOpts(ctx, b, opts)
+	return task.SaveOpts(ctx, b, opts)
 }
 
 func (b *bundle) LoadOpts(ctx context.Context) (runtime.CreateOpts, error) {
-	return systemdRuntime.LoadOpts(ctx, b)
+	return task.LoadOpts(ctx, b)
 }

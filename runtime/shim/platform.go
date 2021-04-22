@@ -1,4 +1,4 @@
-package stdio
+package shim
 
 import (
 	"context"

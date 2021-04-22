@@ -1,4 +1,4 @@
-package events
+package shim
 
 import (
 	"github.com/containerd/containerd/api/events"
@@ -32,7 +32,7 @@ const (
 
 // GetTopic converts an event from an interface type to the specific
 // event topic id
-func GetTopic(e interface{}) string {
+func getTopic(e interface{}) string {
 	switch e.(type) {
 	case *events.TaskCreate:
 		return TaskCreateEventTopic

@@ -29,7 +29,6 @@ import (
 
 	"github.com/containerd/cgroups"
 	eventstypes "github.com/containerd/containerd/api/events"
-	"github.com/containerd/containerd/runtime/v2/shim"
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
 	"golang.org/x/sys/unix"
@@ -41,10 +40,8 @@ import (
 	taskAPI "github.com/containerd/containerd/runtime/v2/task"
 	ptypes "github.com/gogo/protobuf/types"
 
-	"github.com/projecteru2/systemd-runtime/runtime/v2/container"
-	"github.com/projecteru2/systemd-runtime/runtime/v2/events"
-	"github.com/projecteru2/systemd-runtime/runtime/v2/runc"
-	"github.com/projecteru2/systemd-runtime/runtime/v2/stdio"
+	"github.com/projecteru2/systemd-runtime/runtime/shim/runc"
+	"github.com/projecteru2/systemd-runtime/shim"
 )
 
 // var (
@@ -69,9 +66,9 @@ type service struct {
 	mu          sync.Mutex
 	eventSendMu sync.Mutex
 
-	platform   stdio.Platform
+	platform   Platform
 	runtime    runc.Runc
-	containers map[string]*container.Container
+	containers map[string]*Container
 
 	events chan interface{}
 
@@ -103,7 +100,7 @@ func New(ctx context.Context, id string, publisher shim.Publisher, shutdown func
 		// ec:      reaper.Default.Subscribe(),
 		// ep:         ep,
 		// cancel:     shutdown,
-		containers: make(map[string]*container.Container),
+		containers: make(map[string]*Container),
 		runtime:    runc.New(),
 	}
 
@@ -281,7 +278,7 @@ func (s *service) Create(ctx context.Context, r *taskAPI.CreateTaskRequest) (_ *
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	container, err := container.NewContainer(ctx, s.runtime, r)
+	container, err := newContainer(ctx, s.runtime, r)
 	if err != nil {
 		return nil, err
 	}
@@ -508,7 +505,7 @@ func (s *service) forward(ctx context.Context, publisher shim.Publisher) {
 	ns, _ := namespaces.Namespace(ctx)
 	ctx = namespaces.WithNamespace(context.Background(), ns)
 	for e := range s.events {
-		err := publisher.Publish(ctx, events.GetTopic(e), e)
+		err := publisher.Publish(ctx, getTopic(e), e)
 		if err != nil {
 			logrus.WithError(err).Error("post event")
 		}

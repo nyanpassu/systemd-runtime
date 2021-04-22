@@ -1,4 +1,4 @@
-package runtime
+package task
 
 // ShimBinaryName .
 const ShimBinaryName = "eru-systemd-shim"
