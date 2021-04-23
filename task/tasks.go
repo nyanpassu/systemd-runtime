@@ -118,7 +118,35 @@ func (l *TaskList) AddWithNamespace(namespace string, t runtime.Task) error {
 }
 
 // Delete a task
-func (l *TaskList) Delete(ctx context.Context, t runtime.Task) {
+func (l *TaskList) Delete(ctx context.Context, t runtime.Task, f func() error) error {
+	if err := l.Remove(ctx, t); err != nil {
+		return err
+	}
+	if err := f(); err != nil {
+		return l.Add(ctx, t)
+	}
+	return nil
+}
+
+func (l *TaskList) Remove(ctx context.Context, t runtime.Task) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	namespace, err := namespaces.NamespaceRequired(ctx)
+	if err != nil {
+		return err
+	}
+	tasks, ok := l.tasks[namespace]
+	if ok {
+		id := t.ID()
+		task, exists := tasks[id]
+		if exists && task == t {
+			delete(tasks, id)
+		}
+	}
+	return nil
+}
+
+func (l *TaskList) Replace(ctx context.Context, id string, supplier func(context.Context) runtime.Task) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	namespace, err := namespaces.NamespaceRequired(ctx)
@@ -127,10 +155,9 @@ func (l *TaskList) Delete(ctx context.Context, t runtime.Task) {
 	}
 	tasks, ok := l.tasks[namespace]
 	if ok {
-		id := t.ID()
-		task, exists := tasks[id]
-		if exists && task == t {
-			delete(tasks, id)
+		_, exists := tasks[id]
+		if exists {
+			tasks[id] = supplier(ctx)
 		}
 	}
 }

@@ -23,6 +23,7 @@ import (
 	ptypes "github.com/gogo/protobuf/types"
 
 	"github.com/projecteru2/systemd-runtime/runshim"
+	"github.com/projecteru2/systemd-runtime/utils"
 )
 
 var groupLabels = []string{
@@ -202,9 +203,21 @@ func (s shim) SystemdStartShim(ctx context.Context, id, containerdBinary, contai
 		}
 	}()
 
+	wd, err := os.Getwd()
+	if err != nil {
+		return err
+	}
+
 	if err := runshim.WriteAddress("address", address); err != nil {
 		return err
 	}
+
+	go func() {
+		for {
+			// send address over fifo
+			_ = utils.SendAddressOverFifo(context.Background(), wd, address)
+		}
+	}()
 
 	pid := os.Getpid()
 

@@ -66,7 +66,10 @@ func (l *launcher) Create(ctx context.Context) (_ runtime.Task, err error) {
 		return nil, err
 	}
 	return &pendingTask{
-		unit: unit,
+		unit:     unit,
+		bundle:   l.bundle,
+		tasks:    l.tasks,
+		launcher: l,
 	}, nil
 }
 
@@ -123,7 +126,7 @@ func (l *launcher) Load(ctx context.Context) (runtime.Task, error) {
 				tasks.Replace(namespaces.WithNamespace(ctx, bundle.Namespace()), bundle.ID(), func(ctx context.Context) runtime.Task {
 					t, err := launcher.Load(ctx)
 					if err != nil {
-						return loadingFailedTask{}
+						return &loadingFailedTask{}
 					}
 					return t
 				})

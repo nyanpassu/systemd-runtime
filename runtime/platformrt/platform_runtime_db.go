@@ -61,7 +61,7 @@ func initTaskManager(ctx context.Context, m *taskManager) error {
 
 		bundle, err := loadAndCheckBundle(ctx, m, id)
 		if err != nil {
-			m.tasks.Add(ctx, loadingFailedTask{})
+			m.tasks.Add(ctx, &loadingFailedTask{})
 			continue
 		}
 
@@ -92,7 +92,7 @@ func initTaskManager(ctx context.Context, m *taskManager) error {
 		ta, err := launcher.Load(ctx)
 		if err != nil {
 			log.G(ctx).WithError(err).Errorf("loading container %s", id)
-			ta = loadingFailedTask{}
+			ta = &loadingFailedTask{}
 		}
 		m.tasks.Add(ctx, ta)
 	}
