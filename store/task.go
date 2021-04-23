@@ -14,6 +14,7 @@ type Task struct {
 	ID         string
 	BundlePath string
 	Namespace  string
+	Created    bool
 }
 
 type TaskStore interface {

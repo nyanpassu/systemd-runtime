@@ -9,7 +9,7 @@ import (
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 
 	"github.com/projecteru2/systemd-runtime/runtime"
-	platformRuntime "github.com/projecteru2/systemd-runtime/runtime/platform-rt"
+	platformRuntime "github.com/projecteru2/systemd-runtime/runtime/platformrt"
 )
 
 // Config for the v2 runtime

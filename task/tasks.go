@@ -26,8 +26,11 @@ import (
 )
 
 type Tasks interface {
-	Init(context.Context) error
+	Add(context.Context, runtime.Task) error
+	Get(context.Context, string) (runtime.Task, error)
+	GetAll(context.Context, bool) ([]runtime.Task, error)
 	Delete(context.Context, runtime.Task, func() error) error
+	Replace(context.Context, string, func(context.Context) runtime.Task)
 }
 
 // NewtaskList returns a new taskList

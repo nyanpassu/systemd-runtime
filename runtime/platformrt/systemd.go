@@ -1,4 +1,4 @@
-package containerd
+package platformrt
 
 import (
 	"github.com/projecteru2/systemd-runtime/systemd"
@@ -20,4 +20,8 @@ func detail(b task.Bundle) systemd.Detail {
 			WantedBy: "multi-user.target",
 		},
 	}
+}
+
+func name(id string) string {
+	return "eru-systemd-" + id
 }

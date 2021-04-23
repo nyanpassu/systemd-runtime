@@ -21,19 +21,18 @@ import (
 )
 
 const (
-	loadTimeout     = "io.containerd.timeout.shim.load"
-	cleanupTimeout  = "io.containerd.timeout.shim.cleanup"
-	shutdownTimeout = "io.containerd.timeout.shim.shutdown"
+	LoadTimeout     = "io.containerd.timeout.shim.load"
+	CleanupTimeout  = "io.containerd.timeout.shim.cleanup"
+	ShutdownTimeout = "io.containerd.timeout.shim.shutdown"
 )
 
 func init() {
-	timeout.Set(loadTimeout, 5*time.Second)
-	timeout.Set(cleanupTimeout, 5*time.Second)
-	timeout.Set(shutdownTimeout, 3*time.Second)
+	timeout.Set(LoadTimeout, 5*time.Second)
+	timeout.Set(CleanupTimeout, 5*time.Second)
+	timeout.Set(ShutdownTimeout, 3*time.Second)
 }
 
 func NewTask(
-	ctx context.Context,
 	taskPid uint32,
 	bundle Bundle,
 	events *exchange.Exchange,
@@ -330,7 +329,7 @@ func (t *task) close(ctx context.Context) error {
 }
 
 func (t *task) waitShutdown(ctx context.Context) error {
-	ctx, cancel := timeout.WithContext(ctx, shutdownTimeout)
+	ctx, cancel := timeout.WithContext(ctx, ShutdownTimeout)
 	defer cancel()
 	return t.shutdown(ctx)
 }

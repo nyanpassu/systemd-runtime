@@ -1,4 +1,4 @@
-package containerd
+package platformrt
 
 import (
 	"context"
@@ -71,6 +71,18 @@ func newBundle(ctx context.Context, root, state, id string, spec []byte) (task.B
 	// write the spec to the bundle
 	err = ioutil.WriteFile(filepath.Join(b.path, task.ConfigFilename), spec, 0666)
 	return b, err
+}
+
+func loadBundle(ctx context.Context, root, id string) (task.Bundle, error) {
+	ns, err := namespaces.NamespaceRequired(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return &bundle{
+		id:        id,
+		path:      filepath.Join(root, ns, id),
+		namespace: ns,
+	}, nil
 }
 
 type bundle struct {
