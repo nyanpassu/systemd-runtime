@@ -9,8 +9,14 @@ import (
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 
 	"github.com/projecteru2/systemd-runtime/runtime"
-	shimPlatform "github.com/projecteru2/systemd-runtime/runtime/shim/containerd"
+	platformRuntime "github.com/projecteru2/systemd-runtime/runtime/platform-rt"
 )
+
+// Config for the v2 runtime
+type Config struct {
+	// Supported platforms
+	Platforms []string `toml:"platforms"`
+}
 
 func Register() {
 	plugin.Register(&plugin.Registration{
@@ -19,11 +25,11 @@ func Register() {
 		Requires: []plugin.Type{
 			plugin.MetadataPlugin,
 		},
-		Config: &runtime.Config{
+		Config: &Config{
 			Platforms: defaultPlatforms(),
 		},
 		InitFn: func(ic *plugin.InitContext) (interface{}, error) {
-			supportedPlatforms, err := parsePlatforms(ic.Config.(*runtime.Config).Platforms)
+			supportedPlatforms, err := parsePlatforms(ic.Config.(*Config).Platforms)
 			if err != nil {
 				return nil, err
 			}
@@ -41,7 +47,7 @@ func Register() {
 			}
 			cs := metadata.NewContainerStore(m.(*metadata.DB))
 
-			return shimPlatform.New(ic.Context, ic.Root, ic.State, ic.Address, ic.TTRPCAddress, ic.Events, cs)
+			return platformRuntime.New(ic.Context, ic.Root, ic.State, ic.Address, ic.TTRPCAddress, ic.Events, cs)
 		},
 	})
 }

@@ -3,7 +3,8 @@ package containerd
 import (
 	"github.com/projecteru2/systemd-runtime/systemd"
 
-	task "github.com/projecteru2/systemd-runtime/task"
+	"github.com/projecteru2/systemd-runtime/runtime"
+	"github.com/projecteru2/systemd-runtime/task"
 )
 
 func detail(b task.Bundle) systemd.Detail {
@@ -13,7 +14,7 @@ func detail(b task.Bundle) systemd.Detail {
 		},
 		Service: systemd.ServiceSector{
 			Type:      "fork",
-			ExecStart: []string{task.ShimBinaryName},
+			ExecStart: []string{runtime.ShimBinaryName},
 		},
 		Install: systemd.InstallSector{
 			WantedBy: "multi-user.target",

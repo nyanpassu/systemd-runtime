@@ -14,7 +14,7 @@
    limitations under the License.
 */
 
-package shim
+package runshim
 
 import (
 	"context"
@@ -59,6 +59,7 @@ type Shim interface {
 	shimapi.TaskService
 	Cleanup(ctx context.Context) (*shimapi.DeleteResponse, error)
 	StartShim(ctx context.Context, id, containerdBinary, containerdAddress, containerdTTRPCAddress string) (string, error)
+	SystemdStartShim(ctx context.Context, id, containerdBinary, containerdAddress, containerdTTRPCAddress string) error
 }
 
 // OptsKey is the context key for the Opts value.
@@ -196,6 +197,7 @@ func run(id string, initFunc Init, config Config) error {
 	ctx = log.WithLogger(ctx, log.G(ctx).WithField("runtime", id))
 	ctx, cancel := context.WithCancel(ctx)
 	service, err := initFunc(ctx, idFlag, publisher, cancel)
+
 	if err != nil {
 		return err
 	}
@@ -218,29 +220,43 @@ func run(id string, initFunc Init, config Config) error {
 			return err
 		}
 		return nil
-	default:
-		_, err := service.StartShim(ctx, idFlag, containerdBinaryFlag, addressFlag, ttrpcAddress)
+	case "start":
+		address, err := service.StartShim(ctx, idFlag, containerdBinaryFlag, addressFlag, ttrpcAddress)
 		if err != nil {
 			return err
 		}
+		if _, err := os.Stdout.WriteString(address); err != nil {
+			return err
+		}
+		return nil
+	case "systemd":
+		err := service.SystemdStartShim(ctx, idFlag, containerdBinaryFlag, addressFlag, ttrpcAddress)
+		if err != nil {
+			return err
+		}
+		return launch(ctx, config, service, publisher, signals)
+	default:
+		return launch(ctx, config, service, publisher, signals)
+	}
+}
 
-		if !config.NoSetupLogger {
-			if err := setLogger(ctx, idFlag); err != nil {
-				return err
-			}
+func launch(ctx context.Context, config Config, service shimapi.TaskService, publisher *RemoteEventsPublisher, signals chan os.Signal) error {
+	if !config.NoSetupLogger {
+		if err := setLogger(ctx, idFlag); err != nil {
+			return err
 		}
-		client := NewShimClient(ctx, service, signals)
-		if err := client.Serve(); err != nil {
-			if err != context.Canceled {
-				return err
-			}
+	}
+	client := NewShimClient(ctx, service, signals)
+	if err := client.Serve(); err != nil {
+		if err != context.Canceled {
+			return err
 		}
-		select {
-		case <-publisher.Done():
-			return nil
-		case <-time.After(5 * time.Second):
-			return errors.New("publisher not closed")
-		}
+	}
+	select {
+	case <-publisher.Done():
+		return nil
+	case <-time.After(5 * time.Second):
+		return errors.New("publisher not closed")
 	}
 }
 

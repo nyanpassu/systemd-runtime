@@ -16,7 +16,7 @@
    limitations under the License.
 */
 
-package shim
+package runshim
 
 import (
 	"context"

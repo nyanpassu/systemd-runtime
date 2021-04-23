@@ -1,3 +1,5 @@
+// +build darwin
+
 /*
    Copyright The containerd Authors.
 
@@ -14,17 +16,14 @@
    limitations under the License.
 */
 
-package shim
+package runshim
 
-import (
-	"github.com/containerd/containerd/sys/reaper"
-	"github.com/containerd/ttrpc"
-)
+import "github.com/containerd/ttrpc"
 
 func newServer() (*ttrpc.Server, error) {
-	return ttrpc.NewServer(ttrpc.WithServerHandshaker(ttrpc.UnixSocketRequireSameUser()))
+	return ttrpc.NewServer()
 }
 
 func subreaper() error {
-	return reaper.SetSubreaper(1)
+	return nil
 }

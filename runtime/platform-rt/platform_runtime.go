@@ -15,12 +15,6 @@ import (
 	"github.com/projecteru2/systemd-runtime/task"
 )
 
-// Config for the v2 runtime
-type Config struct {
-	// Supported platforms
-	Platforms []string `toml:"platforms"`
-}
-
 // New task manager for v2 shims
 func New(
 	ctx context.Context,

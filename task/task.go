@@ -7,8 +7,6 @@ import (
 
 	"github.com/containerd/containerd/events/exchange"
 
-	"github.com/nyanpassu/containerd-eru-runtime-plugin/bundle"
-
 	"github.com/containerd/ttrpc"
 	"github.com/gogo/protobuf/types"
 	"github.com/pkg/errors"
@@ -37,7 +35,7 @@ func init() {
 func NewTask(
 	ctx context.Context,
 	taskPid uint32,
-	bundle bundle.Bundle,
+	bundle Bundle,
 	events *exchange.Exchange,
 	t taskv2.TaskService,
 	tasks Tasks,
@@ -55,7 +53,7 @@ func NewTask(
 
 type task struct {
 	taskPid uint32
-	bundle  bundle.Bundle
+	bundle  Bundle
 
 	taskService taskv2.TaskService
 	tasks       Tasks

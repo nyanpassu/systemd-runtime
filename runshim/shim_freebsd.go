@@ -1,4 +1,4 @@
-// +build darwin
+// +build freebsd
 
 /*
    Copyright The containerd Authors.
@@ -16,7 +16,7 @@
    limitations under the License.
 */
 
-package shim
+package runshim
 
 import "github.com/containerd/ttrpc"
 

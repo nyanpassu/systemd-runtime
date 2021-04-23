@@ -1,5 +1,3 @@
-// +build freebsd
-
 /*
    Copyright The containerd Authors.
 
@@ -16,14 +14,17 @@
    limitations under the License.
 */
 
-package shim
+package runshim
 
-import "github.com/containerd/ttrpc"
+import (
+	"github.com/containerd/containerd/sys/reaper"
+	"github.com/containerd/ttrpc"
+)
 
 func newServer() (*ttrpc.Server, error) {
-	return ttrpc.NewServer()
+	return ttrpc.NewServer(ttrpc.WithServerHandshaker(ttrpc.UnixSocketRequireSameUser()))
 }
 
 func subreaper() error {
-	return nil
+	return reaper.SetSubreaper(1)
 }
