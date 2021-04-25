@@ -1,9 +1,10 @@
-package main
+package shim
 
 import (
 	"context"
 	"encoding/json"
 	"io/ioutil"
+	"net"
 	"os"
 	"os/exec"
 	"syscall"
@@ -35,12 +36,12 @@ type spec struct {
 	Annotations map[string]string `json:"annotations,omitempty"`
 }
 
-type shim struct {
+type Shim struct {
 	taskAPI.TaskService
 }
 
 // Create Socket ant write socket address to bundle file
-func (s shim) StartShim(ctx context.Context, id, containerdBinary, containerdAddress, containerdTTRPCAddress string) (_ string, retErr error) {
+func (s Shim) StartShim(ctx context.Context, id, containerdBinary, containerdAddress, containerdTTRPCAddress string) (_ string, retErr error) {
 	cmd, err := newCommand(ctx, id, containerdBinary, containerdAddress, containerdTTRPCAddress)
 	if err != nil {
 		return "", err
@@ -154,13 +155,15 @@ func (s shim) StartShim(ctx context.Context, id, containerdBinary, containerdAdd
 	return address, nil
 }
 
-func (s shim) SystemdStartShim(ctx context.Context, id, containerdBinary, containerdAddress, containerdTTRPCAddress string) error {
+func (s Shim) SystemdStartShim(ctx context.Context, id, containerdBinary, containerdAddress, containerdTTRPCAddress string) (net.Listener, error) {
+	// logrus.WithError(err).Warn("failed to remove runc container")
+
 	var retErr error
 
 	grouping := id
 	spec, err := readSpec()
 	if err != nil {
-		return err
+		return nil, err
 	}
 	for _, group := range groupLabels {
 		if groupID, ok := spec.Annotations[group]; ok {
@@ -170,7 +173,7 @@ func (s shim) SystemdStartShim(ctx context.Context, id, containerdBinary, contai
 	}
 	address, err := runshim.SocketAddress(ctx, containerdAddress, grouping)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	socket, err := runshim.NewSocket(address)
@@ -180,19 +183,19 @@ func (s shim) SystemdStartShim(ctx context.Context, id, containerdBinary, contai
 		// grouping functionality where the new process should be run with the same
 		// shim as an existing container
 		if !runshim.SocketEaddrinuse(err) {
-			return errors.Wrapf(err, "create new shim socket")
+			return nil, errors.Wrapf(err, "create new shim socket")
 		}
 		if runshim.CanConnect(address) {
 			if err := runshim.WriteAddress("address", address); err != nil {
-				return errors.Wrapf(err, "write existing socket for shim")
+				return nil, errors.Wrapf(err, "write existing socket for shim")
 			}
-			return nil
+			return nil, nil
 		}
 		if err := runshim.RemoveSocket(address); err != nil {
-			return errors.Wrapf(err, "remove pre-existing socket")
+			return nil, errors.Wrapf(err, "remove pre-existing socket")
 		}
 		if socket, err = runshim.NewSocket(address); err != nil {
-			return errors.Wrapf(err, "try create new shim socket 2x")
+			return nil, errors.Wrapf(err, "try create new shim socket 2x")
 		}
 	}
 
@@ -205,11 +208,11 @@ func (s shim) SystemdStartShim(ctx context.Context, id, containerdBinary, contai
 
 	wd, err := os.Getwd()
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	if err := runshim.WriteAddress("address", address); err != nil {
-		return err
+		return nil, err
 	}
 
 	go func() {
@@ -219,51 +222,51 @@ func (s shim) SystemdStartShim(ctx context.Context, id, containerdBinary, contai
 		}
 	}()
 
-	pid := os.Getpid()
+	// pid := os.Getpid()
 
-	if data, err := ioutil.ReadAll(os.Stdin); err == nil {
-		if len(data) > 0 {
-			var any ptypes.Any
-			if err := proto.Unmarshal(data, &any); err != nil {
-				return err
-			}
-			v, err := typeurl.UnmarshalAny(&any)
-			if err != nil {
-				return err
-			}
-			if opts, ok := v.(*options.Options); ok {
-				if opts.ShimCgroup != "" {
-					if cgroups.Mode() == cgroups.Unified {
-						if err := cgroupsv2.VerifyGroupPath(opts.ShimCgroup); err != nil {
-							return errors.Wrapf(err, "failed to verify cgroup path %q", opts.ShimCgroup)
-						}
-						cg, err := cgroupsv2.LoadManager("/sys/fs/cgroup", opts.ShimCgroup)
-						if err != nil {
-							return errors.Wrapf(err, "failed to load cgroup %s", opts.ShimCgroup)
-						}
-						if err := cg.AddProc(uint64(pid)); err != nil {
-							return errors.Wrapf(err, "failed to join cgroup %s", opts.ShimCgroup)
-						}
-					} else {
-						cg, err := cgroups.Load(cgroups.V1, cgroups.StaticPath(opts.ShimCgroup))
-						if err != nil {
-							return errors.Wrapf(err, "failed to load cgroup %s", opts.ShimCgroup)
-						}
-						if err := cg.Add(cgroups.Process{
-							Pid: pid,
-						}); err != nil {
-							return errors.Wrapf(err, "failed to join cgroup %s", opts.ShimCgroup)
-						}
-					}
-				}
-			}
-		}
-	}
-	return nil
+	// if data, err := ioutil.ReadAll(os.Stdin); err == nil {
+	// 	if len(data) > 0 {
+	// 		var any ptypes.Any
+	// 		if err := proto.Unmarshal(data, &any); err != nil {
+	// 			return err
+	// 		}
+	// 		v, err := typeurl.UnmarshalAny(&any)
+	// 		if err != nil {
+	// 			return err
+	// 		}
+	// 		if opts, ok := v.(*options.Options); ok {
+	// 			if opts.ShimCgroup != "" {
+	// 				if cgroups.Mode() == cgroups.Unified {
+	// 					if err := cgroupsv2.VerifyGroupPath(opts.ShimCgroup); err != nil {
+	// 						return errors.Wrapf(err, "failed to verify cgroup path %q", opts.ShimCgroup)
+	// 					}
+	// 					cg, err := cgroupsv2.LoadManager("/sys/fs/cgroup", opts.ShimCgroup)
+	// 					if err != nil {
+	// 						return errors.Wrapf(err, "failed to load cgroup %s", opts.ShimCgroup)
+	// 					}
+	// 					if err := cg.AddProc(uint64(pid)); err != nil {
+	// 						return errors.Wrapf(err, "failed to join cgroup %s", opts.ShimCgroup)
+	// 					}
+	// 				} else {
+	// 					cg, err := cgroups.Load(cgroups.V1, cgroups.StaticPath(opts.ShimCgroup))
+	// 					if err != nil {
+	// 						return errors.Wrapf(err, "failed to load cgroup %s", opts.ShimCgroup)
+	// 					}
+	// 					if err := cg.Add(cgroups.Process{
+	// 						Pid: pid,
+	// 					}); err != nil {
+	// 						return errors.Wrapf(err, "failed to join cgroup %s", opts.ShimCgroup)
+	// 					}
+	// 				}
+	// 			}
+	// 		}
+	// 	}
+	// }
+	return socket, nil
 }
 
 // Cleanup is a binary call that cleans up any resources used by the shim when the service crashes
-func (s shim) Cleanup(ctx context.Context) (*taskAPI.DeleteResponse, error) {
+func (s Shim) Cleanup(ctx context.Context) (*taskAPI.DeleteResponse, error) {
 	// cwd, err := os.Getwd()
 	// if err != nil {
 	// 	return nil, err

@@ -65,11 +65,11 @@ func SaveOpts(ctx context.Context, b Bundle, opts runtime.CreateOpts) error {
 	return nil
 }
 
-func LoadOpts(ctx context.Context, b Bundle) (runtime.CreateOpts, error) {
+func LoadOpts(ctx context.Context, bundlePath string) (runtime.CreateOpts, error) {
 	var (
 		opts runtime.CreateOpts
 	)
-	f, err := os.Open(filepath.Join(b.Path(), optsFileName))
+	f, err := os.Open(filepath.Join(bundlePath, optsFileName))
 	if err != nil {
 		return runtime.CreateOpts{}, err
 	}

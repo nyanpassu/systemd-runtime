@@ -4,6 +4,14 @@ import (
 	"context"
 )
 
+func NewUnitManager(base string) *UnitManager {
+	return &UnitManager{
+		fileManager: FileManager{
+			Base: base,
+		},
+	}
+}
+
 type UnitManager struct {
 	fileManager FileManager
 }

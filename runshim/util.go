@@ -33,6 +33,8 @@ import (
 	"github.com/gogo/protobuf/proto"
 	"github.com/gogo/protobuf/types"
 	"github.com/pkg/errors"
+
+	"github.com/projecteru2/systemd-runtime/utils"
 )
 
 var runtimePaths sync.Map
@@ -109,6 +111,76 @@ func Command(ctx context.Context, runtime, containerdAddress, containerdTTRPCAdd
 		cmd.Stdin = bytes.NewReader(d)
 	}
 	return cmd, nil
+}
+
+// Command returns the shim command with the provided args and configuration
+func SystemdCommand(ctx context.Context, runtime, containerdAddress, containerdTTRPCAddress, path string, opts *types.Any, cmdArgs ...string) (*utils.Cmd, error) {
+	ns, err := namespaces.NamespaceRequired(ctx)
+	if err != nil {
+		return nil, err
+	}
+	self, err := os.Executable()
+	if err != nil {
+		return nil, err
+	}
+	args := []string{
+		"-namespace", ns,
+		"-address", containerdAddress,
+		"-publish-binary", self,
+	}
+	args = append(args, cmdArgs...)
+	name := BinaryName(runtime)
+	if name == "" {
+		return nil, fmt.Errorf("invalid runtime name %s, correct runtime name should format like io.containerd.runc.v1", runtime)
+	}
+
+	var cmdPath string
+	cmdPathI, cmdPathFound := runtimePaths.Load(name)
+	if cmdPathFound {
+		cmdPath = cmdPathI.(string)
+	} else {
+		var lerr error
+		if cmdPath, lerr = exec.LookPath(name); lerr != nil {
+			if eerr, ok := lerr.(*exec.Error); ok {
+				if eerr.Err == exec.ErrNotFound {
+					// LookPath only finds current directory matches based on
+					// the callers current directory but the caller is not
+					// likely in the same directory as the containerd
+					// executables. Instead match the calling binaries path
+					// (containerd) and see if they are side by side. If so
+					// execute the shim found there.
+					testPath := filepath.Join(filepath.Dir(self), name)
+					if _, serr := os.Stat(testPath); serr == nil {
+						cmdPath = testPath
+					}
+					if cmdPath == "" {
+						return nil, errors.Wrapf(os.ErrNotExist, "runtime %q binary not installed %q", runtime, name)
+					}
+				}
+			}
+		}
+		cmdPath, err = filepath.Abs(cmdPath)
+		if err != nil {
+			return nil, err
+		}
+		if cmdPathI, cmdPathFound = runtimePaths.LoadOrStore(name, cmdPath); cmdPathFound {
+			// We didn't store cmdPath we loaded an already cached value. Use it.
+			cmdPath = cmdPathI.(string)
+		}
+	}
+
+	cmd := utils.Cmd{
+		CmdPath:     cmdPath,
+		Args:        args,
+		WorkingPath: path,
+		Env: append(
+			os.Environ(),
+			"GOMAXPROCS=2",
+			fmt.Sprintf("%s=%s", ttrpcAddressEnv, containerdTTRPCAddress),
+		),
+	}
+
+	return &cmd, nil
 }
 
 // BinaryName returns the shim binary name from the runtime name,

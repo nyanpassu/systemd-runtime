@@ -21,6 +21,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"runtime"
 	"runtime/debug"
@@ -59,7 +60,7 @@ type Shim interface {
 	shimapi.TaskService
 	Cleanup(ctx context.Context) (*shimapi.DeleteResponse, error)
 	StartShim(ctx context.Context, id, containerdBinary, containerdAddress, containerdTTRPCAddress string) (string, error)
-	SystemdStartShim(ctx context.Context, id, containerdBinary, containerdAddress, containerdTTRPCAddress string) error
+	SystemdStartShim(ctx context.Context, id, containerdBinary, containerdAddress, containerdTTRPCAddress string) (net.Listener, error)
 }
 
 // OptsKey is the context key for the Opts value.
@@ -94,6 +95,7 @@ var (
 	addressFlag          string
 	containerdBinaryFlag string
 	action               string
+	socketListener       net.Listener
 )
 
 const (
@@ -229,11 +231,13 @@ func run(id string, initFunc Init, config Config) error {
 			return err
 		}
 		return nil
-	case "systemd":
-		err := service.SystemdStartShim(ctx, idFlag, containerdBinaryFlag, addressFlag, ttrpcAddress)
+	case "systemd-start":
+		logrus.Info("SystemdStartShim")
+		listener, err := service.SystemdStartShim(ctx, idFlag, containerdBinaryFlag, addressFlag, ttrpcAddress)
 		if err != nil {
 			return err
 		}
+		socketListener = listener
 		return launch(ctx, config, service, publisher, signals)
 	default:
 		return launch(ctx, config, service, publisher, signals)
@@ -241,11 +245,12 @@ func run(id string, initFunc Init, config Config) error {
 }
 
 func launch(ctx context.Context, config Config, service shimapi.TaskService, publisher *RemoteEventsPublisher, signals chan os.Signal) error {
-	if !config.NoSetupLogger {
-		if err := setLogger(ctx, idFlag); err != nil {
-			return err
-		}
-	}
+	// if !config.NoSetupLogger {
+	// 	if err := setLogger(ctx, idFlag); err != nil {
+	// 		return err
+	// 	}
+	// }
+	logrus.Info("launch")
 	client := NewShimClient(ctx, service, signals)
 	if err := client.Serve(); err != nil {
 		if err != context.Canceled {
@@ -284,10 +289,11 @@ func (s *Client) Serve() error {
 		return errors.Wrap(err, "failed creating server")
 	}
 
-	logrus.Debug("registering ttrpc server")
+	logrus.Info("registering ttrpc server")
 	shimapi.RegisterTaskService(server, s.service)
 
 	if err := serve(s.context, server, socketFlag); err != nil {
+		logrus.Error("serve error")
 		return err
 	}
 	logger := logrus.WithFields(logrus.Fields{
@@ -306,10 +312,20 @@ func (s *Client) Serve() error {
 // serve serves the ttrpc API over a unix socket at the provided path
 // this function does not block
 func serve(ctx context.Context, server *ttrpc.Server, path string) error {
-	l, err := serveListener(path)
-	if err != nil {
-		return err
+	var (
+		l   net.Listener
+		err error
+	)
+	if socketListener == nil {
+		l, err = serveListener(path)
+		if err != nil {
+			logrus.Errorf("serveListener failed, path = %s", path)
+			return err
+		}
+	} else {
+		l = socketListener
 	}
+
 	go func() {
 		if err := server.Serve(ctx, l); err != nil &&
 			!strings.Contains(err.Error(), "use of closed network connection") {

@@ -15,6 +15,7 @@ import (
 	"github.com/containerd/fifo"
 	"github.com/containerd/ttrpc"
 	"github.com/pkg/errors"
+	"github.com/sirupsen/logrus"
 	"golang.org/x/sys/unix"
 
 	"github.com/containerd/containerd/events/exchange"
@@ -30,7 +31,7 @@ import (
 )
 
 type launcherFactory struct {
-	um systemd.UnitManager
+	um *systemd.UnitManager
 }
 
 func (f *launcherFactory) NewLauncher(
@@ -51,7 +52,7 @@ func (f *launcherFactory) NewLauncher(
 }
 
 type launcher struct {
-	um                     systemd.UnitManager
+	um                     *systemd.UnitManager
 	bundle                 task.Bundle
 	runtime                string
 	containerdAddress      string
@@ -61,7 +62,32 @@ type launcher struct {
 }
 
 func (l *launcher) Create(ctx context.Context) (_ runtime.Task, err error) {
-	unit, err := l.um.Create(ctx, "", systemd.Detail{})
+	args := []string{"-id", l.bundle.ID()}
+	if logrus.GetLevel() == logrus.DebugLevel {
+		args = append(args, "-debug")
+	}
+	args = append(args, "systemd-start")
+
+	cmd, err := runshim.SystemdCommand(ctx, l.runtime, l.containerdAddress, l.containerdTTRPCAddress, l.bundle.Path(), nil, args...)
+	if err != nil {
+		return nil, err
+	}
+	ExecStart := []string{cmd.CmdPath}
+	ExecStart = append(ExecStart, cmd.Args...)
+	unit, err := l.um.Create(ctx, name(l.bundle.ID()), systemd.Detail{
+		Unit: systemd.UnitSector{
+			Description: l.bundle.ID(),
+		},
+		Service: systemd.ServiceSector{
+			Type:             "forking",
+			WorkingDirectory: cmd.WorkingPath,
+			Environment:      cmd.Env,
+			ExecStart:        ExecStart,
+		},
+		Install: systemd.InstallSector{
+			WantedBy: "multi-user.target",
+		},
+	})
 	if err != nil {
 		return nil, err
 	}

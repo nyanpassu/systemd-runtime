@@ -31,7 +31,7 @@ func (t *pendingTask) ID() string {
 func (t *pendingTask) State(context.Context) (runtime.State, error) {
 	return runtime.State{
 		Status: runtime.CreatedStatus,
-	}, errdefs.ErrNotImplemented
+	}, nil
 }
 
 // Kill signals a container

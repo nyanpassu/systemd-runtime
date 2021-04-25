@@ -13,8 +13,10 @@ type UnitSector struct {
 }
 
 type ServiceSector struct {
-	Type      string
-	ExecStart []string
+	Type             string
+	WorkingDirectory string
+	ExecStart        []string
+	Environment      []string
 }
 
 type InstallSector struct {
@@ -36,7 +38,17 @@ func (detail Detail) unit() string {
 }
 
 func (detail Detail) service() string {
-	return fmt.Sprintf("[Service]\nType=%s\nExecStart=%s", detail.Service.Type, strings.Join(detail.Service.ExecStart, " "))
+	envs := []string{}
+	for _, env := range detail.Service.Environment {
+		envs = append(envs, fmt.Sprintf("Environment=\"%s\"", env))
+	}
+	return fmt.Sprintf(
+		"[Service]\nType=%s\nWorkingDirectory=%s\n%s\nExecStart=%s",
+		detail.Service.Type,
+		detail.Service.WorkingDirectory,
+		strings.Join(envs, "\n"),
+		strings.Join(detail.Service.ExecStart, " "),
+	)
 }
 
 func (detail Detail) install() string {

@@ -3,6 +3,7 @@ package utils
 import (
 	"context"
 	"io/ioutil"
+	"os"
 	"syscall"
 
 	"github.com/containerd/fifo"
@@ -16,6 +17,7 @@ func SendAddressOverFifo(ctx context.Context, bundle string, address string) err
 		return err
 	}
 	defer fifo.Close()
+	defer os.Remove(bundle + "/" + fifo_file_name)
 
 	_, err = fifo.Write([]byte(address))
 	return err

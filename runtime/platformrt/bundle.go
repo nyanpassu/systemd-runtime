@@ -112,5 +112,5 @@ func (b *bundle) SaveOpts(ctx context.Context, opts runtime.CreateOpts) error {
 }
 
 func (b *bundle) LoadOpts(ctx context.Context) (runtime.CreateOpts, error) {
-	return task.LoadOpts(ctx, b)
+	return task.LoadOpts(ctx, b.path)
 }
