@@ -241,8 +241,16 @@ func run(id string, initFunc Init, config Config) error {
 		}
 		socketFlag = address
 		socketListener = listener
+		_, err = service.Cleanup(ctx)
+		if err != nil {
+			return err
+		}
 		return launch(ctx, config, service, publisher, signals)
 	default:
+		_, err = service.Cleanup(ctx)
+		if err != nil {
+			return err
+		}
 		return launch(ctx, config, service, publisher, signals)
 	}
 }
@@ -254,6 +262,34 @@ func launch(ctx context.Context, config Config, service shimapi.TaskService, pub
 	// 	}
 	// }
 	logrus.Info("launch")
+
+	// topts := opts.TaskOptions
+	// if topts == nil {
+	// 	topts = opts.RuntimeOptions
+	// }
+	// request := &task.CreateTaskRequest{
+	// 	ID:         s.ID(),
+	// 	Bundle:     s.bundle.Path,
+	// 	Stdin:      opts.IO.Stdin,
+	// 	Stdout:     opts.IO.Stdout,
+	// 	Stderr:     opts.IO.Stderr,
+	// 	Terminal:   opts.IO.Terminal,
+	// 	Checkpoint: opts.Checkpoint,
+	// 	Options:    topts,
+	// }
+	// for _, m := range opts.Rootfs {
+	// 	request.Rootfs = append(request.Rootfs, &types.Mount{
+	// 		Type:    m.Type,
+	// 		Source:  m.Source,
+	// 		Options: m.Options,
+	// 	})
+	// }
+	// response, err := s.task.Create(ctx, request)
+	// if err != nil {
+	// 	return nil, errdefs.FromGRPC(err)
+	// }
+	// s.taskPid = int(response.Pid)
+
 	client := NewShimClient(ctx, service, signals)
 	if err := client.Serve(); err != nil {
 		if err != context.Canceled {

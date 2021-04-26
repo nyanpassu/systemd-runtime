@@ -109,7 +109,13 @@ func (m *taskManager) Create(ctx context.Context, id string, opts runtime.Create
 
 // Get returns a task.
 func (m *taskManager) Get(ctx context.Context, id string) (runtime.Task, error) {
-	return m.tasks.Get(ctx, id)
+	t, err := m.tasks.Get(ctx, id)
+	if err != nil {
+		log.G(ctx).WithField("id", id).WithError(err).Error("get task error")
+		return nil, err
+	}
+	log.G(ctx).WithField("id", t.ID()).Debug("Task Got")
+	return t, nil
 }
 
 // Tasks returns all the current tasks for the runtime.

@@ -7,20 +7,26 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"syscall"
 	"time"
 
 	"github.com/containerd/cgroups"
 	"github.com/gogo/protobuf/proto"
 	"github.com/pkg/errors"
+	"github.com/sirupsen/logrus"
 	"golang.org/x/sys/unix"
 
 	"github.com/containerd/typeurl"
 
 	cgroupsv2 "github.com/containerd/cgroups/v2"
+	"github.com/containerd/containerd/mount"
 	"github.com/containerd/containerd/namespaces"
+	"github.com/containerd/containerd/pkg/process"
+	"github.com/containerd/containerd/runtime/v2/runc"
 	"github.com/containerd/containerd/runtime/v2/runc/options"
 	taskAPI "github.com/containerd/containerd/runtime/v2/task"
+	runcC "github.com/containerd/go-runc"
 	ptypes "github.com/gogo/protobuf/types"
 
 	"github.com/projecteru2/systemd-runtime/runshim"
@@ -36,6 +42,7 @@ type spec struct {
 }
 
 type Shim struct {
+	ID string
 	taskAPI.TaskService
 }
 
@@ -257,37 +264,37 @@ func (s Shim) SystemdStartShim(ctx context.Context, id, containerdBinary, contai
 
 // Cleanup is a binary call that cleans up any resources used by the shim when the service crashes
 func (s Shim) Cleanup(ctx context.Context) (*taskAPI.DeleteResponse, error) {
-	// cwd, err := os.Getwd()
-	// if err != nil {
-	// 	return nil, err
-	// }
-	// path := filepath.Join(filepath.Dir(cwd), s.id)
-	// ns, err := namespaces.NamespaceRequired(ctx)
-	// if err != nil {
-	// 	return nil, err
-	// }
-	// runtime, err := container.ReadRuntime(path)
-	// if err != nil {
-	// 	return nil, err
-	// }
-	// opts, err := container.ReadOptions(path)
-	// if err != nil {
-	// 	return nil, err
-	// }
-	// root := process.RuncRoot
-	// if opts != nil && opts.Root != "" {
-	// 	root = opts.Root
-	// }
+	cwd, err := os.Getwd()
+	if err != nil {
+		return nil, err
+	}
+	path := filepath.Join(filepath.Dir(cwd), s.ID)
+	ns, err := namespaces.NamespaceRequired(ctx)
+	if err != nil {
+		return nil, err
+	}
+	runtime, err := runc.ReadRuntime(path)
+	if err != nil {
+		return nil, err
+	}
+	opts, err := runc.ReadOptions(path)
+	if err != nil {
+		return nil, err
+	}
+	root := process.RuncRoot
+	if opts != nil && opts.Root != "" {
+		root = opts.Root
+	}
 
-	// r := runc.New(root, path, ns, runtime, "", false)
-	// if err := r.Delete(ctx, s.id, &runc.DeleteOpts{
-	// 	Force: true,
-	// }); err != nil {
-	// 	logrus.WithError(err).Warn("failed to remove runc container")
-	// }
-	// if err := mount.UnmountAll(filepath.Join(path, "rootfs"), 0); err != nil {
-	// 	logrus.WithError(err).Warn("failed to cleanup rootfs mount")
-	// }
+	r := process.NewRunc(root, path, ns, runtime, "", false)
+	if err := r.Delete(ctx, s.ID, &runcC.DeleteOpts{
+		Force: true,
+	}); err != nil {
+		logrus.WithError(err).Warn("failed to remove runc container")
+	}
+	if err := mount.UnmountAll(filepath.Join(path, "rootfs"), 0); err != nil {
+		logrus.WithError(err).Warn("failed to cleanup rootfs mount")
+	}
 	return &taskAPI.DeleteResponse{
 		ExitedAt:   time.Now(),
 		ExitStatus: 128 + uint32(unix.SIGKILL),

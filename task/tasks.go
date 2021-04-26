@@ -20,6 +20,7 @@ import (
 	"context"
 	"sync"
 
+	"github.com/containerd/containerd/log"
 	"github.com/containerd/containerd/namespaces"
 	"github.com/containerd/containerd/runtime"
 	"github.com/pkg/errors"
@@ -72,6 +73,7 @@ func (l *TaskList) GetAll(ctx context.Context, noNS bool) ([]runtime.Task, error
 	defer l.mu.Unlock()
 	var o []runtime.Task
 	if noNS {
+		log.G(ctx).Info("no ns")
 		for ns := range l.tasks {
 			for _, t := range l.tasks[ns] {
 				o = append(o, t)
@@ -83,11 +85,14 @@ func (l *TaskList) GetAll(ctx context.Context, noNS bool) ([]runtime.Task, error
 	if err != nil {
 		return nil, err
 	}
+	log.G(ctx).WithField("namespace", namespace).Info("get all task in namespace")
 	tasks, ok := l.tasks[namespace]
 	if !ok {
+		log.G(ctx).WithField("namespace", namespace).Info("no task in namespace")
 		return o, nil
 	}
 	for _, t := range tasks {
+		log.G(ctx).WithField("namespace", namespace).WithField("taskID", t.ID()).Info("task in namespace")
 		o = append(o, t)
 	}
 	return o, nil
@@ -152,15 +157,16 @@ func (l *TaskList) Replace(ctx context.Context, id string, t runtime.Task) {
 	defer l.mu.Unlock()
 	namespace, err := namespaces.NamespaceRequired(ctx)
 	if err != nil {
+		log.G(ctx).Error("namespace not presented")
 		return
 	}
+	log.G(ctx).WithField("namespace", namespace).WithField("taskID", t.ID()).Info("add with namespace")
 	tasks, ok := l.tasks[namespace]
-	if ok {
-		_, exists := tasks[id]
-		if exists {
-			tasks[id] = t
-		}
+	if !ok {
+		tasks = make(map[string]runtime.Task)
+		l.tasks[namespace] = tasks
 	}
+	tasks[id] = t
 }
 
 func (l *TaskList) ReplaceWithSupplier(ctx context.Context, id string, supplier func(context.Context) runtime.Task) {

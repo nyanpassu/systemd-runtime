@@ -19,5 +19,5 @@ func newShim(ctx context.Context, id string, publisher runshim.Publisher, shutdo
 	if err != nil {
 		return nil, err
 	}
-	return cmdShim.Shim{TaskService: taskService}, nil
+	return cmdShim.Shim{ID: id, TaskService: taskService}, nil
 }
