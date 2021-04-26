@@ -8,26 +8,29 @@ import (
 	"path/filepath"
 
 	"net"
-	"os"
+	// "os"
 	gruntime "runtime"
 	"time"
 
 	"github.com/containerd/fifo"
-	"github.com/containerd/ttrpc"
+	// "github.com/containerd/ttrpc"
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
 	"golang.org/x/sys/unix"
 
+	// "github.com/containerd/containerd/api/types"
 	"github.com/containerd/containerd/events/exchange"
 	"github.com/containerd/containerd/log"
 	"github.com/containerd/containerd/namespaces"
-	"github.com/containerd/containerd/pkg/timeout"
+
+	// "github.com/containerd/containerd/pkg/timeout"
 	"github.com/containerd/containerd/runtime"
 	taskapi "github.com/containerd/containerd/runtime/v2/task"
 
 	"github.com/projecteru2/systemd-runtime/runshim"
 	"github.com/projecteru2/systemd-runtime/systemd"
 	"github.com/projecteru2/systemd-runtime/task"
+	// "github.com/projecteru2/systemd-runtime/utils"
 )
 
 type launcherFactory struct {
@@ -61,7 +64,7 @@ type launcher struct {
 	tasks                  task.Tasks
 }
 
-func (l *launcher) Create(ctx context.Context) (_ runtime.Task, err error) {
+func (l *launcher) Create(ctx context.Context, opts runtime.CreateOpts) (_ runtime.Task, err error) {
 	args := []string{"-id", l.bundle.ID()}
 	if logrus.GetLevel() == logrus.DebugLevel {
 		args = append(args, "-debug")
@@ -79,7 +82,7 @@ func (l *launcher) Create(ctx context.Context) (_ runtime.Task, err error) {
 			Description: l.bundle.ID(),
 		},
 		Service: systemd.ServiceSector{
-			Type:             "forking",
+			Type:             "exec",
 			WorkingDirectory: cmd.WorkingPath,
 			Environment:      cmd.Env,
 			ExecStart:        ExecStart,
@@ -89,94 +92,206 @@ func (l *launcher) Create(ctx context.Context) (_ runtime.Task, err error) {
 		},
 	})
 	if err != nil {
+		log.G(ctx).WithError(err).Error("create systemd unit error")
 		return nil, err
 	}
-	return &pendingTask{
+	// log.G(ctx).Info("start unit")
+	// if err := unit.Start(ctx); err != nil {
+	// 	log.G(ctx).WithError(err).Error("start unit error")
+	// 	return nil, err
+	// }
+	// log.G(ctx).Info("ReceiveAddressOverFifo")
+	// addr, err := utils.ReceiveAddressOverFifo(ctx, l.bundle.Path())
+	// if err != nil {
+	// 	log.G(ctx).WithError(err).Error("ReceiveAddressOverFifo error")
+	// 	return nil, err
+	// }
+	// log.G(ctx).Info("TTRPC Connect")
+	// conn, err := runshim.Connect(addr, runshim.AnonReconnectDialer)
+	// if err != nil {
+	// 	log.G(ctx).WithError(err).Error("TTRPC Connect Error")
+	// 	return nil, err
+	// }
+	// defer func() {
+	// 	if err != nil {
+	// 		conn.Close()
+	// 	}
+	// }()
+	// client := ttrpc.NewClient(conn)
+	// taskClient := taskapi.NewTaskClient(client)
+
+	// log.G(ctx).Info("Connect Shim")
+	// _, err = taskClient.Connect(ctx, &taskapi.ConnectRequest{ID: l.bundle.ID()})
+	// if err != nil {
+	// 	log.G(ctx).WithError(err).Error("Connect Shim Error")
+	// 	return nil, err
+	// }
+
+	// topts := opts.TaskOptions
+	// if topts == nil {
+	// 	topts = opts.RuntimeOptions
+	// }
+
+	// req := &taskapi.CreateTaskRequest{
+	// 	ID:         l.bundle.ID(),
+	// 	Bundle:     l.bundle.Path(),
+	// 	Stdin:      opts.IO.Stdin,
+	// 	Stdout:     opts.IO.Stdout,
+	// 	Stderr:     opts.IO.Stderr,
+	// 	Terminal:   opts.IO.Terminal,
+	// 	Checkpoint: opts.Checkpoint,
+	// 	Options:    topts,
+	// }
+	// for _, m := range opts.Rootfs {
+	// 	req.Rootfs = append(req.Rootfs, &types.Mount{
+	// 		Type:    m.Type,
+	// 		Source:  m.Source,
+	// 		Options: m.Options,
+	// 	})
+	// }
+
+	// log.G(ctx).Info("Create container")
+	// createResp, err := taskClient.Create(ctx, req)
+	// if err != nil {
+	// 	log.G(ctx).WithError(err).Error("Create container failed")
+	// 	return nil, err
+	// }
+
+	// log.G(ctx).Info("Shutdown Shim")
+	// _, err = taskClient.Shutdown(ctx, &taskapi.ShutdownRequest{
+	// 	ID: l.bundle.ID(),
+	// })
+	// if err != nil {
+	// 	log.G(ctx).WithError(err).Error("Shutdown Shim Error")
+	// 	return nil, err
+	// }
+
+	// t := task.NewTask(createResp.Pid, l.bundle, l.events, taskClient, l.tasks, client)
+	// if err := l.tasks.Add(ctx, t); err != nil {
+	// 	return nil, err
+	// }
+
+	// return t, nil
+
+	t := &pendingTask{
 		unit:     unit,
 		bundle:   l.bundle,
 		tasks:    l.tasks,
 		launcher: l,
-	}, nil
+		events:   l.events,
+	}
+	if err := l.tasks.Add(ctx, t); err != nil {
+		return nil, err
+	}
+	return t, nil
 }
 
-func (l *launcher) Load(ctx context.Context) (runtime.Task, error) {
-	address, err := loadAddress(filepath.Join(l.bundle.Path(), "address"))
+func (l *launcher) LoadAsync(ctx context.Context) (runtime.Task, error) {
+	unit, err := l.um.Get(ctx, name(l.bundle.ID()))
 	if err != nil {
 		return nil, err
 	}
-
-	conn, err := runshim.Connect(address, runshim.AnonReconnectDialer)
-	if err != nil {
+	t := &pendingTask{
+		unit:     unit,
+		bundle:   l.bundle,
+		tasks:    l.tasks,
+		events:   l.events,
+		launcher: l,
+	}
+	if err := l.tasks.Add(ctx, t); err != nil {
 		return nil, err
 	}
-	defer func() {
-		if err != nil {
-			conn.Close()
-		}
-	}()
-	shimCtx, cancelShimLog := context.WithCancel(ctx)
-	defer func() {
-		if err != nil {
-			cancelShimLog()
-		}
-	}()
-	f, err := openShimLog(shimCtx, l.bundle, runshim.AnonReconnectDialer)
-	if err != nil {
-		return nil, errors.Wrap(err, "open shim log pipe")
-	}
-	defer func() {
-		if err != nil {
-			f.Close()
-		}
-	}()
-	// open the log pipe and block until the writer is ready
-	// this helps with synchronization of the shim
-	// copy the shim's logs to containerd's output
 	go func() {
-		defer f.Close()
-		if _, err := io.Copy(os.Stderr, f); err != nil {
-			// When using a multi-container shim the 2nd to Nth container in the
-			// shim will not have a separate log pipe. Ignore the failure log
-			// message here when the shim connect times out.
-			if !errors.Is(err, os.ErrNotExist) {
-				log.G(ctx).WithError(err).Error("copy shim log")
-			}
-		}
-	}()
-	onCloseWithShimLog := func(tasks task.Tasks, bundle task.Bundle) func() {
-		return func() {
-			go func() {
-				ctx, cancel := timeout.WithContext(context.Background(), task.LoadTimeout)
-				defer cancel()
-				var launcher task.TaskLauncher
-				tasks.Replace(namespaces.WithNamespace(ctx, bundle.Namespace()), bundle.ID(), func(ctx context.Context) runtime.Task {
-					t, err := launcher.Load(ctx)
-					if err != nil {
-						return &loadingFailedTask{}
-					}
-					return t
-				})
-			}()
-			cancelShimLog()
-			f.Close()
-		}
-	}(l.tasks, l.bundle)
-	client := ttrpc.NewClient(conn, ttrpc.WithOnClose(onCloseWithShimLog))
-	defer func() {
+		ctx := namespaces.WithNamespace(context.Background(), l.bundle.Namespace())
+		_, err := t.loadAndReplaceSelf(ctx)
 		if err != nil {
-			client.Close()
+			l.tasks.Add(ctx, &loadingFailedTask{})
+			return
 		}
 	}()
-	taskClient := taskapi.NewTaskClient(client)
-
-	ctx, cancel := timeout.WithContext(ctx, task.LoadTimeout)
-	defer cancel()
-	taskPid, err := connect(ctx, taskClient, l.bundle.ID())
-	if err != nil {
-		return nil, err
-	}
-	return task.NewTask(taskPid, l.bundle, l.events, taskClient, l.tasks, client), nil
+	return t, nil
 }
+
+// func (l *launcher) Load(ctx context.Context) (runtime.Task, error) {
+// 	address, err := utils.ReceiveAddressOverFifo(ctx, l.bundle.Path())
+// 	// loadAddress(filepath.Join(l.bundle.Path(), "address"))
+// 	if err != nil {
+// 		return nil, err
+// 	}
+// 	conn, err := runshim.Connect(address, runshim.AnonReconnectDialer)
+// 	if err != nil {
+// 		return nil, err
+// 	}
+// 	defer func() {
+// 		if err != nil {
+// 			conn.Close()
+// 		}
+// 	}()
+// 	shimCtx, cancelShimLog := context.WithCancel(ctx)
+// 	defer func() {
+// 		if err != nil {
+// 			cancelShimLog()
+// 		}
+// 	}()
+// 	f, err := openShimLog(shimCtx, l.bundle, runshim.AnonReconnectDialer)
+// 	if err != nil {
+// 		return nil, errors.Wrap(err, "open shim log pipe")
+// 	}
+// 	defer func() {
+// 		if err != nil {
+// 			f.Close()
+// 		}
+// 	}()
+// 	// open the log pipe and block until the writer is ready
+// 	// this helps with synchronization of the shim
+// 	// copy the shim's logs to containerd's output
+// 	// go func() {
+// 	// 	defer f.Close()
+// 	// 	if _, err := io.Copy(os.Stderr, f); err != nil {
+// 	// 		// When using a multi-container shim the 2nd to Nth container in the
+// 	// 		// shim will not have a separate log pipe. Ignore the failure log
+// 	// 		// message here when the shim connect times out.
+// 	// 		if !errors.Is(err, os.ErrNotExist) {
+// 	// 			log.G(ctx).WithError(err).Error("copy shim log")
+// 	// 		}
+// 	// 	}
+// 	// }()
+
+// 	onCloseWithShimLog := func(tasks task.Tasks, bundle task.Bundle) func() {
+// 		return func() {
+// 			go func() {
+// 				ctx, cancel := timeout.WithContext(context.Background(), task.LoadTimeout)
+// 				defer cancel()
+// 				var launcher task.TaskLauncher
+// 				tasks.ReplaceWithSupplier(namespaces.WithNamespace(ctx, bundle.Namespace()), bundle.ID(), func(ctx context.Context) runtime.Task {
+// 					t, err := launcher.Load(ctx)
+// 					if err != nil {
+// 						return &loadingFailedTask{}
+// 					}
+// 					return t
+// 				})
+// 			}()
+// 			cancelShimLog()
+// 			f.Close()
+// 		}
+// 	}(l.tasks, l.bundle)
+
+// 	client := ttrpc.NewClient(conn, ttrpc.WithOnClose(onCloseWithShimLog))
+// 	defer func() {
+// 		if err != nil {
+// 			client.Close()
+// 		}
+// 	}()
+// 	taskClient := taskapi.NewTaskClient(client)
+
+// 	ctx, cancel := timeout.WithContext(ctx, task.LoadTimeout)
+// 	defer cancel()
+// 	taskPid, err := connect(ctx, taskClient, l.bundle.ID())
+// 	if err != nil {
+// 		return nil, err
+// 	}
+// 	return task.NewTask(taskPid, l.bundle, l.events, taskClient, l.tasks, client), nil
+// }
 
 func (l *launcher) Delete(ctx context.Context) (*runtime.Exit, error) {
 	log.G(ctx).Info("cleaning up dead shim")

@@ -6,6 +6,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/containerd/containerd/api/types"
 	taskapi "github.com/containerd/containerd/runtime/v2/task"
 	"github.com/containerd/ttrpc"
 
@@ -25,38 +26,79 @@ func main() {
 	}
 	address := getAddress()
 	id := getID()
+
+	log.Printf("create connection")
+	conn, err := runshim.Connect(address, runshim.AnonReconnectDialer)
+	if err != nil {
+		log.Fatalln(err)
+	}
+	defer conn.Close()
+	client := ttrpc.NewClient(conn)
+	taskClient := taskapi.NewTaskClient(client)
+	log.Printf("connect remote")
+	resp, err := taskClient.Connect(context.Background(), &taskapi.ConnectRequest{ID: id})
+	if err != nil {
+		log.Fatalf("connect error, cause = %v", err)
+	}
+	log.Printf("conn resp = %v", resp)
+
 	switch os.Args[1] {
 	case "create":
-		log.Printf("create connection")
-		conn, err := runshim.Connect(address, runshim.AnonReconnectDialer)
-		if err != nil {
-			log.Fatalln(err)
-		}
-		defer conn.Close()
-		client := ttrpc.NewClient(conn)
-		taskClient := taskapi.NewTaskClient(client)
-		log.Printf("connect remote")
-		resp, err := taskClient.Connect(context.Background(), &taskapi.ConnectRequest{ID: id})
-		if err != nil {
-			log.Fatalf("connect error, cause = %v", err)
-		}
-		log.Printf("conn resp = %v", resp)
-
 		log.Printf("create task")
-		r, err := taskClient.Create(context.Background(), &taskapi.CreateTaskRequest{
-			ID:         id,
-			Bundle:     wd,
-			Stdin:      opts.IO.Stdin,
-			Stdout:     opts.IO.Stdout,
-			Stderr:     opts.IO.Stderr,
-			Terminal:   opts.IO.Terminal,
+		topts := opts.TaskOptions
+		if topts == nil {
+			topts = opts.RuntimeOptions
+		}
+		req := &taskapi.CreateTaskRequest{
+			ID:     id,
+			Bundle: wd,
+			// Stdin:      opts.IO.Stdin,
+			// Stdout:     opts.IO.Stdout,
+			// Stderr:     opts.IO.Stderr,
+			// Terminal:   opts.IO.Terminal,
 			Checkpoint: opts.Checkpoint,
-			Options:    opts.RuntimeOptions,
-		})
+			Options:    topts,
+		}
+		for _, m := range opts.Rootfs {
+			req.Rootfs = append(req.Rootfs, &types.Mount{
+				Type:    m.Type,
+				Source:  m.Source,
+				Options: m.Options,
+			})
+		}
+
+		r, err := taskClient.Create(context.Background(), req)
 		if err != nil {
 			log.Fatalf("create error, cause = %v", err)
 		}
 		log.Printf("create success, pid = %v", r.Pid)
+	case "shutdown":
+		log.Printf("shutdown")
+		_, err = taskClient.Shutdown(context.Background(), &taskapi.ShutdownRequest{
+			ID: id,
+		})
+		if err != nil {
+			log.Fatalf("create error, cause = %v", err)
+		}
+		log.Printf("shutdown shim success")
+	case "start":
+		log.Printf("start %s", id)
+		resp, err := taskClient.Start(context.Background(), &taskapi.StartRequest{
+			ID: id,
+		})
+		if err != nil {
+			log.Fatalf("start error, cause = %v", err)
+		}
+		log.Printf("start success, resp = %v", resp)
+	case "delete":
+		log.Printf("delete")
+		deleteResp, err := taskClient.Delete(context.Background(), &taskapi.DeleteRequest{
+			ID: id,
+		})
+		if err != nil {
+			log.Fatalf("delete task error, cause = %v", err)
+		}
+		log.Printf("delete task success, resp = %v", deleteResp)
 	default:
 		log.Println(id)
 	}

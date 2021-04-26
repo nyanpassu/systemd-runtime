@@ -24,7 +24,6 @@ import (
 	ptypes "github.com/gogo/protobuf/types"
 
 	"github.com/projecteru2/systemd-runtime/runshim"
-	"github.com/projecteru2/systemd-runtime/utils"
 )
 
 var groupLabels = []string{
@@ -155,15 +154,18 @@ func (s Shim) StartShim(ctx context.Context, id, containerdBinary, containerdAdd
 	return address, nil
 }
 
-func (s Shim) SystemdStartShim(ctx context.Context, id, containerdBinary, containerdAddress, containerdTTRPCAddress string) (net.Listener, error) {
+func (s Shim) SystemdStartShim(ctx context.Context, id, containerdBinary, containerdAddress, containerdTTRPCAddress string) (string, net.Listener, error) {
 	// logrus.WithError(err).Warn("failed to remove runc container")
 
-	var retErr error
+	var (
+		retErr  error
+		address string
+	)
 
 	grouping := id
 	spec, err := readSpec()
 	if err != nil {
-		return nil, err
+		return address, nil, err
 	}
 	for _, group := range groupLabels {
 		if groupID, ok := spec.Annotations[group]; ok {
@@ -171,9 +173,9 @@ func (s Shim) SystemdStartShim(ctx context.Context, id, containerdBinary, contai
 			break
 		}
 	}
-	address, err := runshim.SocketAddress(ctx, containerdAddress, grouping)
+	address, err = runshim.SocketAddress(ctx, containerdAddress, grouping)
 	if err != nil {
-		return nil, err
+		return address, nil, err
 	}
 
 	socket, err := runshim.NewSocket(address)
@@ -183,19 +185,19 @@ func (s Shim) SystemdStartShim(ctx context.Context, id, containerdBinary, contai
 		// grouping functionality where the new process should be run with the same
 		// shim as an existing container
 		if !runshim.SocketEaddrinuse(err) {
-			return nil, errors.Wrapf(err, "create new shim socket")
+			return address, nil, errors.Wrapf(err, "create new shim socket")
 		}
 		if runshim.CanConnect(address) {
 			if err := runshim.WriteAddress("address", address); err != nil {
-				return nil, errors.Wrapf(err, "write existing socket for shim")
+				return address, nil, errors.Wrapf(err, "write existing socket for shim")
 			}
-			return nil, nil
+			return address, nil, nil
 		}
 		if err := runshim.RemoveSocket(address); err != nil {
-			return nil, errors.Wrapf(err, "remove pre-existing socket")
+			return address, nil, errors.Wrapf(err, "remove pre-existing socket")
 		}
 		if socket, err = runshim.NewSocket(address); err != nil {
-			return nil, errors.Wrapf(err, "try create new shim socket 2x")
+			return address, nil, errors.Wrapf(err, "try create new shim socket 2x")
 		}
 	}
 
@@ -206,21 +208,9 @@ func (s Shim) SystemdStartShim(ctx context.Context, id, containerdBinary, contai
 		}
 	}()
 
-	wd, err := os.Getwd()
-	if err != nil {
-		return nil, err
-	}
-
 	if err := runshim.WriteAddress("address", address); err != nil {
-		return nil, err
+		return address, nil, err
 	}
-
-	go func() {
-		for {
-			// send address over fifo
-			_ = utils.SendAddressOverFifo(context.Background(), wd, address)
-		}
-	}()
 
 	// pid := os.Getpid()
 
@@ -262,7 +252,7 @@ func (s Shim) SystemdStartShim(ctx context.Context, id, containerdBinary, contai
 	// 		}
 	// 	}
 	// }
-	return socket, nil
+	return address, socket, nil
 }
 
 // Cleanup is a binary call that cleans up any resources used by the shim when the service crashes

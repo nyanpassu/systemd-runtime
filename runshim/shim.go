@@ -37,6 +37,8 @@ import (
 	"github.com/gogo/protobuf/proto"
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
+
+	"github.com/projecteru2/systemd-runtime/utils"
 )
 
 // Client for a shim server
@@ -60,7 +62,7 @@ type Shim interface {
 	shimapi.TaskService
 	Cleanup(ctx context.Context) (*shimapi.DeleteResponse, error)
 	StartShim(ctx context.Context, id, containerdBinary, containerdAddress, containerdTTRPCAddress string) (string, error)
-	SystemdStartShim(ctx context.Context, id, containerdBinary, containerdAddress, containerdTTRPCAddress string) (net.Listener, error)
+	SystemdStartShim(ctx context.Context, id, containerdBinary, containerdAddress, containerdTTRPCAddress string) (string, net.Listener, error)
 }
 
 // OptsKey is the context key for the Opts value.
@@ -233,10 +235,11 @@ func run(id string, initFunc Init, config Config) error {
 		return nil
 	case "systemd-start":
 		logrus.Info("SystemdStartShim")
-		listener, err := service.SystemdStartShim(ctx, idFlag, containerdBinaryFlag, addressFlag, ttrpcAddress)
+		address, listener, err := service.SystemdStartShim(ctx, idFlag, containerdBinaryFlag, addressFlag, ttrpcAddress)
 		if err != nil {
 			return err
 		}
+		socketFlag = address
 		socketListener = listener
 		return launch(ctx, config, service, publisher, signals)
 	default:
@@ -312,9 +315,21 @@ func (s *Client) Serve() error {
 // serve serves the ttrpc API over a unix socket at the provided path
 // this function does not block
 func serve(ctx context.Context, server *ttrpc.Server, path string) error {
+
+	wd, err := os.Getwd()
+	if err != nil {
+		return err
+	}
+
+	go func() {
+		for {
+			// send address over fifo
+			_ = utils.SendAddressOverFifo(context.Background(), wd, path)
+		}
+	}()
+
 	var (
-		l   net.Listener
-		err error
+		l net.Listener
 	)
 	if socketListener == nil {
 		l, err = serveListener(path)

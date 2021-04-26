@@ -99,7 +99,8 @@ func (m *taskManager) Create(ctx context.Context, id string, opts runtime.Create
 	// }
 
 	launcher := m.launcherFactory.NewLauncher(ctx, bundle, opts.Runtime, m.containerdAddress, m.containerdTTRPCAddress, m.events, m.tasks)
-	ta, err := launcher.Create(ctx)
+	ta, err := launcher.Create(ctx, opts)
+
 	if err != nil {
 		return nil, err
 	}
@@ -197,7 +198,7 @@ func (m *taskManager) loadingTasks(ctx context.Context) error {
 		}
 
 		launcher := m.launcherFactory.NewLauncher(ctx, bundle, container.Runtime.Name, m.containerdAddress, m.containerdTTRPCAddress, m.events, m.tasks)
-		ta, err := launcher.Load(ctx)
+		ta, err := launcher.LoadAsync(ctx)
 		if err != nil {
 			log.G(ctx).WithError(err).Errorf("loading container %s", id)
 			ta = &loadingFailedTask{}

@@ -13,7 +13,7 @@ func detail(b task.Bundle) systemd.Detail {
 			Description: "EruSystemdUnit-" + b.ID(),
 		},
 		Service: systemd.ServiceSector{
-			Type:      "fork",
+			Type:      "exec",
 			ExecStart: []string{runtime.ShimBinaryName},
 		},
 		Install: systemd.InstallSector{

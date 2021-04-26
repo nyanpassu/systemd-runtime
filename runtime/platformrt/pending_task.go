@@ -5,11 +5,19 @@ import (
 	"sync"
 
 	"github.com/containerd/containerd/errdefs"
+	"github.com/containerd/containerd/events/exchange"
+	"github.com/containerd/containerd/log"
+	"github.com/containerd/containerd/pkg/timeout"
 	"github.com/containerd/containerd/runtime"
+	taskapi "github.com/containerd/containerd/runtime/v2/task"
+	"github.com/containerd/ttrpc"
+
 	"github.com/gogo/protobuf/types"
 
+	"github.com/projecteru2/systemd-runtime/runshim"
 	"github.com/projecteru2/systemd-runtime/systemd"
 	"github.com/projecteru2/systemd-runtime/task"
+	"github.com/projecteru2/systemd-runtime/utils"
 )
 
 type pendingTask struct {
@@ -19,6 +27,7 @@ type pendingTask struct {
 	bundle   task.Bundle
 	unit     *systemd.Unit
 	tasks    task.Tasks
+	events   *exchange.Exchange
 	launcher task.TaskLauncher
 }
 
@@ -51,22 +60,20 @@ func (t *pendingTask) CloseIO(context.Context) error {
 
 // Start the container's user defined process
 func (t *pendingTask) Start(ctx context.Context) error {
-	t.lock.Lock()
-	defer t.lock.Unlock()
+	ta := t.getTask()
 
-	if t.task != nil {
-		return t.task.Start(ctx)
+	if ta != nil {
+		return ta.Start(ctx)
 	}
 
 	if err := t.unit.Start(ctx); err != nil {
 		return err
 	}
-	ta, err := t.launcher.Load(ctx)
+
+	ta, err := t.loadAndReplaceSelf(ctx)
 	if err != nil {
 		return err
 	}
-	t.task = ta
-	t.tasks.Replace(ctx, t.ID(), func(context.Context) runtime.Task { return ta })
 	return ta.Start(ctx)
 }
 
@@ -131,4 +138,58 @@ func (t *pendingTask) Process(context.Context, string) (runtime.Process, error) 
 // Stats returns runtime specific metrics for a task
 func (t *pendingTask) Stats(context.Context) (*types.Any, error) {
 	return nil, errdefs.ErrNotImplemented
+}
+
+func (t *pendingTask) getTask() runtime.Task {
+	t.lock.Lock()
+	defer t.lock.Unlock()
+
+	return t.task
+}
+
+func (t *pendingTask) reset() {
+	t.lock.Lock()
+	defer t.lock.Unlock()
+
+	t.task = nil
+}
+
+func (t *pendingTask) loadAndReplaceSelf(ctx context.Context) (runtime.Task, error) {
+	t.lock.Lock()
+	defer t.lock.Unlock()
+
+	if t.task != nil {
+		return t.task, nil
+	}
+
+	addr, err := utils.ReceiveAddressOverFifo(ctx, t.bundle.Path())
+	if err != nil {
+		log.G(ctx).WithError(err).Error("Create container failed")
+		return nil, err
+	}
+	conn, err := runshim.Connect(addr, runshim.AnonReconnectDialer)
+	if err != nil {
+		log.G(ctx).WithError(err).Error("Connect with shim failed")
+		return nil, err
+	}
+	client := ttrpc.NewClient(conn, ttrpc.WithOnClose(func() {
+		ctx := context.Background()
+
+		t.reset()
+		t.tasks.Replace(ctx, t.bundle.ID(), t)
+		t.loadAndReplaceSelf(ctx)
+	}))
+	taskClient := taskapi.NewTaskClient(client)
+
+	ctx, cancel := timeout.WithContext(ctx, task.LoadTimeout)
+	defer cancel()
+	taskPid, err := connect(ctx, taskClient, t.bundle.ID())
+	if err != nil {
+		log.G(ctx).WithError(err).Error("Connect with shim failed")
+		return nil, err
+	}
+	ta := task.NewTask(taskPid, t.bundle, t.events, taskClient, t.tasks, client)
+	t.task = ta
+	t.tasks.Replace(ctx, t.bundle.ID(), ta)
+	return ta, nil
 }

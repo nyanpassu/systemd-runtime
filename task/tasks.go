@@ -30,7 +30,8 @@ type Tasks interface {
 	Get(context.Context, string) (runtime.Task, error)
 	GetAll(context.Context, bool) ([]runtime.Task, error)
 	Delete(context.Context, runtime.Task, func() error) error
-	Replace(context.Context, string, func(context.Context) runtime.Task)
+	Replace(context.Context, string, runtime.Task)
+	ReplaceWithSupplier(context.Context, string, func(context.Context) runtime.Task)
 }
 
 // NewtaskList returns a new taskList
@@ -146,7 +147,23 @@ func (l *TaskList) Remove(ctx context.Context, t runtime.Task) error {
 	return nil
 }
 
-func (l *TaskList) Replace(ctx context.Context, id string, supplier func(context.Context) runtime.Task) {
+func (l *TaskList) Replace(ctx context.Context, id string, t runtime.Task) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	namespace, err := namespaces.NamespaceRequired(ctx)
+	if err != nil {
+		return
+	}
+	tasks, ok := l.tasks[namespace]
+	if ok {
+		_, exists := tasks[id]
+		if exists {
+			tasks[id] = t
+		}
+	}
+}
+
+func (l *TaskList) ReplaceWithSupplier(ctx context.Context, id string, supplier func(context.Context) runtime.Task) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	namespace, err := namespaces.NamespaceRequired(ctx)

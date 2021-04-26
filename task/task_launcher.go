@@ -13,7 +13,8 @@ type TaskLauncherFactory interface {
 }
 
 type TaskLauncher interface {
-	Create(ctx context.Context) (runtime.Task, error)
-	Load(ctx context.Context) (runtime.Task, error)
+	Create(ctx context.Context, opts runtime.CreateOpts) (runtime.Task, error)
+	// Load(ctx context.Context) (runtime.Task, error)
+	LoadAsync(ctx context.Context) (runtime.Task, error)
 	Delete(ctx context.Context) (*runtime.Exit, error)
 }
