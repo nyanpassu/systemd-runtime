@@ -295,7 +295,6 @@ func (l *launcher) LoadAsync(ctx context.Context) (runtime.Task, error) {
 
 func (l *launcher) Delete(ctx context.Context) (*runtime.Exit, error) {
 	log.G(ctx).Info("cleaning up dead shim")
-
 	// Windows cannot delete the current working directory while an
 	// executable is in use with it. For the cleanup case we invoke with the
 	// default work dir and forward the bundle path on the cmdline.

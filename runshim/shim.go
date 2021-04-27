@@ -28,6 +28,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/containerd/containerd/api/types"
 	"github.com/containerd/containerd/events"
 	"github.com/containerd/containerd/log"
 	"github.com/containerd/containerd/namespaces"
@@ -38,6 +39,7 @@ import (
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
 
+	"github.com/projecteru2/systemd-runtime/task"
 	"github.com/projecteru2/systemd-runtime/utils"
 )
 
@@ -60,7 +62,7 @@ type Init func(context.Context, string, Publisher, func()) (Shim, error)
 // Shim server interface
 type Shim interface {
 	shimapi.TaskService
-	Cleanup(ctx context.Context) (*shimapi.DeleteResponse, error)
+	Cleanup(ctx context.Context, id string) (*shimapi.DeleteResponse, error)
 	StartShim(ctx context.Context, id, containerdBinary, containerdAddress, containerdTTRPCAddress string) (string, error)
 	SystemdStartShim(ctx context.Context, id, containerdBinary, containerdAddress, containerdTTRPCAddress string) (string, net.Listener, error)
 }
@@ -150,18 +152,18 @@ func setLogger(ctx context.Context, id string) error {
 }
 
 // Run initializes and runs a shim server
-func Run(id string, initFunc Init, opts ...BinaryOpts) {
+func Run(shimID string, initFunc Init, opts ...BinaryOpts) {
 	var config Config
 	for _, o := range opts {
 		o(&config)
 	}
-	if err := run(id, initFunc, config); err != nil {
-		fmt.Fprintf(os.Stderr, "%s: %s\n", id, err)
+	if err := run(shimID, initFunc, config); err != nil {
+		fmt.Fprintf(os.Stderr, "%s: %s\n", shimID, err)
 		os.Exit(1)
 	}
 }
 
-func run(id string, initFunc Init, config Config) error {
+func run(shimID string, initFunc Init, config Config) error {
 	parseFlags()
 	if versionFlag {
 		fmt.Printf("%s:\n", os.Args[0])
@@ -184,6 +186,11 @@ func run(id string, initFunc Init, config Config) error {
 		}
 	}
 
+	cwd, err := os.Getwd()
+	if err != nil {
+		return err
+	}
+
 	ttrpcAddress := os.Getenv(ttrpcAddressEnv)
 
 	publisher, err := NewPublisher(ttrpcAddress)
@@ -198,7 +205,7 @@ func run(id string, initFunc Init, config Config) error {
 	}
 	ctx := namespaces.WithNamespace(context.Background(), namespaceFlag)
 	ctx = context.WithValue(ctx, OptsKey{}, Opts{BundlePath: bundlePath, Debug: debugFlag})
-	ctx = log.WithLogger(ctx, log.G(ctx).WithField("runtime", id))
+	ctx = log.WithLogger(ctx, log.G(ctx).WithField("runtime", shimID))
 	ctx, cancel := context.WithCancel(ctx)
 	service, err := initFunc(ctx, idFlag, publisher, cancel)
 
@@ -212,7 +219,7 @@ func run(id string, initFunc Init, config Config) error {
 			"namespace": namespaceFlag,
 		})
 		go handleSignals(ctx, logger, signals)
-		response, err := service.Cleanup(ctx)
+		response, err := service.Cleanup(ctx, idFlag)
 		if err != nil {
 			return err
 		}
@@ -234,25 +241,61 @@ func run(id string, initFunc Init, config Config) error {
 		}
 		return nil
 	case "systemd-start":
-		logrus.Info("SystemdStartShim")
+		logrus.WithField("id", idFlag).Info("SystemdStartShim")
 		address, listener, err := service.SystemdStartShim(ctx, idFlag, containerdBinaryFlag, addressFlag, ttrpcAddress)
 		if err != nil {
 			return err
 		}
 		socketFlag = address
 		socketListener = listener
-		_, err = service.Cleanup(ctx)
+		i := initializer{
+			service:    service,
+			id:         idFlag,
+			bundlePath: cwd,
+		}
+		logrus.Info("Cleanup")
+		_, err = service.Cleanup(ctx, idFlag)
 		if err != nil {
 			return err
 		}
+		go func() {
+			initialize(namespaces.WithNamespace(context.Background(), namespaceFlag), i)
+		}()
 		return launch(ctx, config, service, publisher, signals)
 	default:
-		_, err = service.Cleanup(ctx)
+
+		_, err = service.Cleanup(ctx, idFlag)
+		if err != nil {
+			return err
+		}
+
+		i := initializer{
+			service:    service,
+			id:         idFlag,
+			bundlePath: cwd,
+		}
+
+		err = initialize(ctx, i)
 		if err != nil {
 			return err
 		}
 		return launch(ctx, config, service, publisher, signals)
 	}
+}
+
+func initialize(ctx context.Context, i initializer) error {
+	logrus.Info("initialize")
+	if err := i.create(ctx); err != nil {
+		logrus.WithError(err).Error("create failed")
+		return err
+	}
+	logrus.Info("start")
+	if err := i.start(ctx); err != nil {
+		logrus.WithError(err).Error("start failed")
+		return err
+	}
+	logrus.Info("initialize done")
+	return nil
 }
 
 func launch(ctx context.Context, config Config, service shimapi.TaskService, publisher *RemoteEventsPublisher, signals chan os.Signal) error {
@@ -262,33 +305,6 @@ func launch(ctx context.Context, config Config, service shimapi.TaskService, pub
 	// 	}
 	// }
 	logrus.Info("launch")
-
-	// topts := opts.TaskOptions
-	// if topts == nil {
-	// 	topts = opts.RuntimeOptions
-	// }
-	// request := &task.CreateTaskRequest{
-	// 	ID:         s.ID(),
-	// 	Bundle:     s.bundle.Path,
-	// 	Stdin:      opts.IO.Stdin,
-	// 	Stdout:     opts.IO.Stdout,
-	// 	Stderr:     opts.IO.Stderr,
-	// 	Terminal:   opts.IO.Terminal,
-	// 	Checkpoint: opts.Checkpoint,
-	// 	Options:    topts,
-	// }
-	// for _, m := range opts.Rootfs {
-	// 	request.Rootfs = append(request.Rootfs, &types.Mount{
-	// 		Type:    m.Type,
-	// 		Source:  m.Source,
-	// 		Options: m.Options,
-	// 	})
-	// }
-	// response, err := s.task.Create(ctx, request)
-	// if err != nil {
-	// 	return nil, errdefs.FromGRPC(err)
-	// }
-	// s.taskPid = int(response.Pid)
 
 	client := NewShimClient(ctx, service, signals)
 	if err := client.Serve(); err != nil {
@@ -404,4 +420,54 @@ func dumpStacks(logger *logrus.Entry) {
 	}
 	buf = buf[:stackSize]
 	logger.Infof("=== BEGIN goroutine stack dump ===\n%s\n=== END goroutine stack dump ===", buf)
+}
+
+type initializer struct {
+	service    shimapi.TaskService
+	id         string
+	bundlePath string
+}
+
+func (i *initializer) create(ctx context.Context) error {
+	logrus.Info("LoadOpts")
+	opts, err := task.LoadOpts(ctx, i.bundlePath)
+	if err != nil {
+		logrus.WithError(err).Error("LoadOpts failed")
+		return err
+	}
+
+	topts := opts.TaskOptions
+	if topts == nil {
+		topts = opts.RuntimeOptions
+	}
+	request := &shimapi.CreateTaskRequest{
+		ID:     i.id,
+		Bundle: i.bundlePath,
+		// Stdin:      opts.IO.Stdin,
+		// Stdout:     opts.IO.Stdout,
+		// Stderr:     opts.IO.Stderr,
+		// Terminal:   opts.IO.Terminal,
+		Checkpoint: opts.Checkpoint,
+		Options:    topts,
+	}
+	for _, m := range opts.Rootfs {
+		request.Rootfs = append(request.Rootfs, &types.Mount{
+			Type:    m.Type,
+			Source:  m.Source,
+			Options: m.Options,
+		})
+	}
+	logrus.Info("Create")
+	_, err = i.service.Create(ctx, request)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (i *initializer) start(ctx context.Context) error {
+	_, err := i.service.Start(ctx, &shimapi.StartRequest{
+		ID: i.id,
+	})
+	return err
 }

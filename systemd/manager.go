@@ -47,6 +47,17 @@ func (m *UnitManager) Get(ctx context.Context, name string) (*Unit, error) {
 	}, nil
 }
 
-func (m *UnitManager) Remove(ctx context.Context, name string) error {
-	return m.fileManager.RemoveSystemdUnitFile(name)
+func (m *UnitManager) DoIfPresent(ctx context.Context, name string, f func() error) error {
+	exists, err := m.fileManager.UnitFileExists(name)
+	if err != nil {
+		return err
+	}
+	if !exists {
+		return nil
+	}
+	return f()
+}
+
+func (m *UnitManager) DeleteIfPresent(ctx context.Context, name string) error {
+	return m.fileManager.DeleteSystemdUnitFileIfPresent(name)
 }

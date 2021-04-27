@@ -26,9 +26,9 @@ import (
 	"github.com/containerd/containerd/runtime/v2/runc"
 	"github.com/containerd/containerd/runtime/v2/runc/options"
 	taskAPI "github.com/containerd/containerd/runtime/v2/task"
-	runcC "github.com/containerd/go-runc"
 	ptypes "github.com/gogo/protobuf/types"
 
+	goRunc "github.com/projecteru2/systemd-runtime/go-runc"
 	"github.com/projecteru2/systemd-runtime/runshim"
 )
 
@@ -42,7 +42,6 @@ type spec struct {
 }
 
 type Shim struct {
-	ID string
 	taskAPI.TaskService
 }
 
@@ -263,20 +262,32 @@ func (s Shim) SystemdStartShim(ctx context.Context, id, containerdBinary, contai
 }
 
 // Cleanup is a binary call that cleans up any resources used by the shim when the service crashes
-func (s Shim) Cleanup(ctx context.Context) (*taskAPI.DeleteResponse, error) {
+func (s Shim) Cleanup(ctx context.Context, id string) (*taskAPI.DeleteResponse, error) {
+	logrus.WithField("id", id).Info("Begin Cleanup")
 	cwd, err := os.Getwd()
 	if err != nil {
 		return nil, err
 	}
-	path := filepath.Join(filepath.Dir(cwd), s.ID)
+	path := filepath.Join(filepath.Dir(cwd), id)
 	ns, err := namespaces.NamespaceRequired(ctx)
 	if err != nil {
 		return nil, err
 	}
-	runtime, err := runc.ReadRuntime(path)
-	if err != nil {
-		return nil, err
-	}
+
+	runtime := "/usr/local/sbin/runc"
+	// logrus.WithField("id", id).Info("ReadRuntime")
+	// runtime, err := runc.ReadRuntime(path)
+	// if err != nil {
+	// 	if os.IsNotExist(err) {
+	// 		logrus.Warn("Runtime not exists")
+	// 		return &taskAPI.DeleteResponse{
+	// 			ExitedAt:   time.Now(),
+	// 			ExitStatus: 128 + uint32(unix.SIGKILL),
+	// 		}, nil
+	// 	}
+	// 	return nil, err
+	// }
+	logrus.WithField("id", id).Info("ReadOptions")
 	opts, err := runc.ReadOptions(path)
 	if err != nil {
 		return nil, err
@@ -286,15 +297,21 @@ func (s Shim) Cleanup(ctx context.Context) (*taskAPI.DeleteResponse, error) {
 		root = opts.Root
 	}
 
-	r := process.NewRunc(root, path, ns, runtime, "", false)
-	if err := r.Delete(ctx, s.ID, &runcC.DeleteOpts{
+	logrus.WithField("runtime", runtime).WithField("ns", ns).WithField("root", root).WithField("path", path).Info("NewRunc")
+	r := newRunc(root, path, ns, runtime, "", false)
+
+	logrus.WithField("id", id).Info("Runc Delete")
+	if err := r.Delete(ctx, id, &goRunc.DeleteOpts{
 		Force: true,
 	}); err != nil {
 		logrus.WithError(err).Warn("failed to remove runc container")
 	}
+	logrus.Info("UnmountAll")
 	if err := mount.UnmountAll(filepath.Join(path, "rootfs"), 0); err != nil {
 		logrus.WithError(err).Warn("failed to cleanup rootfs mount")
 	}
+
+	logrus.Info("Done Cleanup")
 	return &taskAPI.DeleteResponse{
 		ExitedAt:   time.Now(),
 		ExitStatus: 128 + uint32(unix.SIGKILL),
@@ -339,4 +356,16 @@ func newCommand(ctx context.Context, id, containerdBinary, containerdAddress, co
 		Setpgid: true,
 	}
 	return cmd, nil
+}
+
+func newRunc(root, path, namespace, runtime, criu string, systemd bool) *goRunc.Runc {
+	return &goRunc.Runc{
+		Command:       runtime,
+		Log:           filepath.Join(path, "log.json"),
+		LogFormat:     goRunc.JSON,
+		PdeathSignal:  unix.SIGKILL,
+		Root:          filepath.Join(root, namespace),
+		Criu:          criu,
+		SystemdCgroup: systemd,
+	}
 }

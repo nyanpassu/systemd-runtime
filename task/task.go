@@ -18,6 +18,8 @@ import (
 	"github.com/containerd/containerd/pkg/timeout"
 	"github.com/containerd/containerd/runtime"
 	taskv2 "github.com/containerd/containerd/runtime/v2/task"
+
+	"github.com/projecteru2/systemd-runtime/systemd"
 )
 
 const (
@@ -35,6 +37,7 @@ func init() {
 func NewTask(
 	taskPid uint32,
 	bundle Bundle,
+	unit *systemd.Unit,
 	events *exchange.Exchange,
 	t taskv2.TaskService,
 	tasks Tasks,
@@ -43,6 +46,7 @@ func NewTask(
 	return &task{
 		taskPid:     taskPid,
 		bundle:      bundle,
+		unit:        unit,
 		taskService: t,
 		tasks:       tasks,
 		events:      events,
@@ -54,6 +58,7 @@ type task struct {
 	taskPid uint32
 	bundle  Bundle
 
+	unit        *systemd.Unit
 	taskService taskv2.TaskService
 	tasks       Tasks
 	events      *exchange.Exchange
@@ -67,10 +72,13 @@ func (t *task) ID() string {
 
 // State returns the process state
 func (t *task) State(ctx context.Context) (runtime.State, error) {
+	log.G(ctx).WithField("id", t.ID()).Info("State")
+
 	response, err := t.taskService.State(ctx, &taskv2.StateRequest{
 		ID: t.ID(),
 	})
 	if err != nil {
+		log.G(ctx).WithField("id", t.ID()).WithError(err).Error("State error")
 		if !errors.Is(err, ttrpc.ErrClosed) {
 			return runtime.State{}, errdefs.FromGRPC(err)
 		}
@@ -167,6 +175,12 @@ func (t *task) Wait(ctx context.Context) (*runtime.Exit, error) {
 
 // Delete deletes the process
 func (t *task) Delete(ctx context.Context) (*runtime.Exit, error) {
+	if err := t.unit.DisableIfPresent(ctx); err != nil {
+		return nil, err
+	}
+	if err := t.unit.DeleteIfPresent(ctx); err != nil {
+		return nil, err
+	}
 	response, shimErr := t.taskService.Delete(ctx, &taskv2.DeleteRequest{
 		ID: t.ID(),
 	})

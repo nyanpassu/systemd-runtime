@@ -71,6 +71,7 @@ func (m *taskManager) ID() string {
 
 // Create creates a task with the provided id and options.
 func (m *taskManager) Create(ctx context.Context, id string, opts runtime.CreateOpts) (runtime.Task, error) {
+	log.G(ctx).WithField("id", id).Debug("Get Task")
 	bundle, err := newBundle(ctx, m.root, m.state, id, opts.Spec.Value)
 	if err != nil {
 		return nil, err
@@ -109,6 +110,7 @@ func (m *taskManager) Create(ctx context.Context, id string, opts runtime.Create
 
 // Get returns a task.
 func (m *taskManager) Get(ctx context.Context, id string) (runtime.Task, error) {
+	log.G(ctx).WithField("id", id).Debug("Get Task")
 	t, err := m.tasks.Get(ctx, id)
 	if err != nil {
 		log.G(ctx).WithField("id", id).WithError(err).Error("get task error")

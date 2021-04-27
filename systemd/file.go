@@ -72,7 +72,7 @@ func (m *FileManager) GenerateSystemdUnitFile(name string, detail Detail) error 
 	return f.Close()
 }
 
-func (m *FileManager) RemoveSystemdUnitFile(name string) error {
+func (m *FileManager) DeleteSystemdUnitFileIfPresent(name string) error {
 	exists, err := m.UnitFileExists(name)
 	if err != nil {
 		return err

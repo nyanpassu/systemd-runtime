@@ -14,8 +14,10 @@ func (u *Unit) Enable(ctx context.Context) error {
 	return cmd("enable", u.Name)
 }
 
-func (u *Unit) Disable(ctx context.Context) error {
-	return cmd("disable", u.Name)
+func (u *Unit) DisableIfPresent(ctx context.Context) error {
+	return u.manager.DoIfPresent(ctx, u.Name, func() error {
+		return cmd("disable", u.Name)
+	})
 }
 
 func (u *Unit) Start(ctx context.Context) error {
@@ -26,8 +28,8 @@ func (u *Unit) Stop(ctx context.Context) error {
 	return cmd("stop", u.Name)
 }
 
-func (u *Unit) Remove(ctx context.Context) error {
-	return u.manager.Remove(ctx, u.Name)
+func (u *Unit) DeleteIfPresent(ctx context.Context) error {
+	return u.manager.DeleteIfPresent(ctx, u.Name)
 }
 
 func cmd(args ...string) error {

@@ -72,6 +72,7 @@ func (t *pendingTask) CloseIO(context.Context) error {
 }
 
 // Start the container's user defined process
+// Consider that our shim is started by it self, so we only need to start the systemd unit, and wait for connection
 func (t *pendingTask) Start(ctx context.Context) error {
 	log.G(ctx).WithField("id", t.ID()).Info("Start")
 
@@ -88,14 +89,10 @@ func (t *pendingTask) Start(ctx context.Context) error {
 		return err
 	}
 
-	ta, err := t.loadAndReplaceSelf(ctx)
+	_, err := t.loadAndReplaceSelf(ctx)
 	if err != nil {
 		log.G(ctx).WithField("id", t.ID()).WithError(err).Error("loadAndReplaceSelf error")
 		return err
-	}
-
-	if err := ta.Start(ctx); err != nil {
-		log.G(ctx).WithField("id", ta.ID()).WithError(err).Error("start task error")
 	}
 	return nil
 }
@@ -107,7 +104,10 @@ func (t *pendingTask) Wait(context.Context) (*runtime.Exit, error) {
 
 // Delete deletes the process
 func (t *pendingTask) Delete(ctx context.Context) (*runtime.Exit, error) {
-	if err := t.unit.Remove(ctx); err != nil {
+	if err := t.unit.DisableIfPresent(ctx); err != nil {
+		return nil, err
+	}
+	if err := t.unit.DeleteIfPresent(ctx); err != nil {
 		return nil, err
 	}
 	return t.launcher.Delete(ctx)
@@ -217,7 +217,7 @@ func (t *pendingTask) loadAndReplaceSelf(ctx context.Context) (runtime.Task, err
 		log.G(ctx).WithError(err).Error("Connect with shim failed")
 		return nil, err
 	}
-	ta := task.NewTask(taskPid, t.bundle, t.events, taskClient, t.tasks, client)
+	ta := task.NewTask(taskPid, t.bundle, t.unit, t.events, taskClient, t.tasks, client)
 	t.task = ta
 
 	log.G(ctx).Info("Replace Task")
