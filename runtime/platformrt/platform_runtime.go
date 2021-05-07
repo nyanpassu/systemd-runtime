@@ -13,8 +13,8 @@ import (
 	"github.com/containerd/containerd/log"
 	"github.com/containerd/containerd/namespaces"
 	"github.com/containerd/containerd/runtime"
-	"github.com/nyanpassu/containerd-eru-runtime-plugin/common"
 
+	systemdRuntime "github.com/projecteru2/systemd-runtime/runtime"
 	"github.com/projecteru2/systemd-runtime/systemd"
 	"github.com/projecteru2/systemd-runtime/task"
 )
@@ -66,7 +66,7 @@ type taskManager struct {
 
 // ID of the runtime
 func (m *taskManager) ID() string {
-	return common.RuntimeName
+	return systemdRuntime.RuntimeName
 }
 
 // Create creates a task with the provided id and options.
