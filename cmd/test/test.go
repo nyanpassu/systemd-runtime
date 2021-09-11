@@ -1,0 +1,149 @@
+package main
+
+import (
+	"encoding/json"
+	"flag"
+	"io"
+	"os"
+	"os/signal"
+	"sync/atomic"
+	"syscall"
+
+	"golang.org/x/sys/unix"
+
+	"github.com/pkg/errors"
+	"github.com/sirupsen/logrus"
+)
+
+func main() {
+
+	pid := os.Getpid()
+	logrus.Infof("pid = %d", pid)
+
+	dir, err := os.Getwd()
+	if err != nil {
+		logrus.Fatalln(errors.Wrap(err, "get wd error"))
+	}
+
+	signals := make(chan os.Signal, 32)
+	signal.Notify(signals, []os.Signal{unix.SIGTERM, unix.SIGINT}...)
+
+	shouldUnlock := new(int32)
+	shouldExit := new(int32)
+	ch1 := make(chan struct{})
+	ch2 := make(chan struct{})
+
+	go func() {
+		for sig := range signals {
+			switch sig {
+			case unix.SIGTERM:
+				logrus.Info("SIGTERM")
+				if atomic.LoadInt32(shouldUnlock) == 1 {
+					atomic.StoreInt32(shouldUnlock, 2)
+					close(ch1)
+				}
+				if atomic.LoadInt32(shouldExit) == 1 {
+					atomic.StoreInt32(shouldExit, 2)
+					close(ch2)
+				}
+			case unix.SIGINT:
+				logrus.Info("SIGINT")
+				if atomic.LoadInt32(shouldUnlock) == 1 {
+					atomic.StoreInt32(shouldUnlock, 2)
+					close(ch1)
+				}
+				if atomic.LoadInt32(shouldExit) == 1 {
+					atomic.StoreInt32(shouldExit, 2)
+					close(ch2)
+				}
+			}
+		}
+	}()
+
+	var (
+		file *os.File
+	)
+	file, err = os.OpenFile(dir+"/"+"test.lock", os.O_RDWR|os.O_CREATE, 0666)
+	if err != nil {
+		logrus.WithError(err).Fatalln("open file failed")
+	}
+
+	flag.Parse()
+	action := flag.Arg(0)
+	switch action {
+	case "test":
+		test(file)
+		return
+	case "b":
+		block(file)
+	case "nb":
+		nblock(file)
+	default:
+		logrus.Fatalf("unrecognized action %s", action)
+	}
+
+	atomic.StoreInt32(shouldUnlock, 1)
+	<-ch1
+
+	unlock(file)
+	logrus.Info("unlocked, press ctrl + c to exit")
+
+	atomic.StoreInt32(shouldExit, 1)
+	<-ch2
+}
+
+func test(file *os.File) {
+	flock_t := &syscall.Flock_t{
+		Start:  0,
+		Len:    0,
+		Type:   syscall.F_WRLCK,
+		Whence: io.SeekStart,
+	}
+	if err := syscall.FcntlFlock(file.Fd(), syscall.F_GETLK, flock_t); err != nil {
+		logrus.WithError(err).Fatalln("test file lock error")
+	}
+	content, err := json.Marshal(flock_t)
+	if err != nil {
+		logrus.WithError(err).Fatalln("marshal flock_t error")
+	}
+	logrus.WithField("CanLock", flock_t.Type == syscall.F_UNLCK).Infof("flock_t = %s", content)
+}
+
+func block(file *os.File) {
+	if err := syscall.FcntlFlock(file.Fd(), syscall.F_SETLKW, &syscall.Flock_t{
+		Start:  0,
+		Len:    0,
+		Type:   syscall.F_WRLCK,
+		Whence: io.SeekStart,
+	}); err != nil {
+		if err == syscall.EINTR {
+			logrus.Fatalln("file is already locked, exit")
+		}
+		logrus.WithError(err).Fatalln("lock file error")
+	}
+}
+
+func nblock(file *os.File) {
+	if err := syscall.FcntlFlock(file.Fd(), syscall.F_SETLK, &syscall.Flock_t{
+		Start:  0,
+		Len:    0,
+		Type:   syscall.F_WRLCK,
+		Whence: io.SeekStart,
+	}); err != nil {
+		if err == syscall.EAGAIN || err == syscall.EACCES {
+			logrus.Fatalln("file is already locked, exit")
+		}
+		logrus.WithError(err).Fatalln("lock file error")
+	}
+}
+
+func unlock(file *os.File) {
+	if err := syscall.FcntlFlock(file.Fd(), syscall.F_SETLK, &syscall.Flock_t{
+		Start:  0,
+		Len:    0,
+		Type:   syscall.F_UNLCK,
+		Whence: io.SeekStart,
+	}); err != nil {
+		logrus.WithError(err).Fatalln("unlock file error")
+	}
+}

@@ -25,4 +25,18 @@ func (once *Once) Run() {
 	}
 
 	once.run()
+	return
+}
+
+func (once *Once) RunAfterExec(exec func()) bool {
+	once.mutex.Lock()
+	defer once.mutex.Unlock()
+
+	if once.done {
+		return false
+	}
+
+	exec()
+	once.run()
+	return true
 }

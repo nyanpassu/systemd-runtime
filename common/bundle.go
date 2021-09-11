@@ -2,8 +2,6 @@ package common
 
 import (
 	"context"
-	"encoding/json"
-	"os"
 
 	"github.com/containerd/containerd/events/exchange"
 	"github.com/containerd/containerd/log"
@@ -14,19 +12,12 @@ import (
 )
 
 const (
-	fifoFileName         = "fifo_address"
-	bundleStatusFileName = "status.lock"
+	fifoFileName = "fifo_address"
 )
 
 var (
 	ErrTaskNotExited = errors.New("task not exited")
 )
-
-type BundleStatus struct {
-	Started  bool
-	Exited   *runtime.Exit
-	Disabled bool
-}
 
 type Bundle interface {
 	ID() string
@@ -54,13 +45,12 @@ func ReceiveAddressOverFifo(ctx context.Context, bundlePath string) (string, err
 
 func DisableBundle(ctx context.Context, bundlePath string) (started bool, err error) {
 	var prev *BundleStatus
-	prev, err = updateBundleStatus(ctx, bundlePath, func(prev *BundleStatus) (BundleStatus, bool) {
+	prev, err = UpdateBundleStatus(ctx, bundlePath, func(prev *BundleStatus) (BundleStatus, bool) {
 		if prev.Disabled {
-			return BundleStatus{}, false
+			return *prev, false
 		}
-		b := *prev
-		b.Disabled = true
-		return b, true
+		prev.Disabled = true
+		return *prev, true
 	})
 	if err != nil {
 		return
@@ -68,27 +58,10 @@ func DisableBundle(ctx context.Context, bundlePath string) (started bool, err er
 	return prev.Started, nil
 }
 
-func BundleStarted(ctx context.Context, bundlePath string) (disabled bool, err error) {
-	var prev *BundleStatus
-	prev, err = updateBundleStatus(ctx, bundlePath, func(prev *BundleStatus) (BundleStatus, bool) {
-		if prev.Disabled {
-			return BundleStatus{}, false
-		}
-		b := *prev
-		b.Started = true
-		return b, true
-	})
-	if err != nil {
-		return
-	}
-	return prev.Disabled, nil
-}
-
 func WriteExited(ctx context.Context, bundlePath string, exit *runtime.Exit) (err error) {
-	_, err = updateBundleStatus(ctx, bundlePath, func(prev *BundleStatus) (BundleStatus, bool) {
-		b := *prev
-		b.Exited = exit
-		return b, true
+	_, err = UpdateBundleStatus(ctx, bundlePath, func(prev *BundleStatus) (BundleStatus, bool) {
+		prev.Exited = exit
+		return *prev, true
 	})
 	return err
 }
@@ -96,65 +69,12 @@ func WriteExited(ctx context.Context, bundlePath string, exit *runtime.Exit) (er
 func ReadExited(ctx context.Context, bundlePath string) (exit *runtime.Exit, err error) {
 	log.G(ctx).WithField("bundlePath", bundlePath).Debug("read exited from file")
 	var prev *BundleStatus
-	if prev, err = updateBundleStatus(ctx, bundlePath, func(prev *BundleStatus) (BundleStatus, bool) {
-		return BundleStatus{}, false
-	}); err != nil {
+	status, err := GetBundleStatus(ctx, bundlePath)
+	if err != nil {
 		return nil, err
 	}
-	if prev.Exited == nil {
+	if status == nil || status.Exited == nil {
 		return nil, ErrTaskNotExited
 	}
 	return prev.Exited, nil
-}
-
-func updateBundleStatus(ctx context.Context, bundlePath string, mapping func(*BundleStatus) (BundleStatus, bool)) (s *BundleStatus, err error) {
-	var (
-		lock utils.Flock
-		data []byte
-	)
-	lock, err = utils.NewFlock(bundlePath+"/"+bundleStatusFileName, os.O_RDWR|os.O_CREATE, 0666)
-	if err != nil {
-		return
-	}
-	if err = lock.Lock(); err != nil {
-		return
-	}
-	defer func() {
-		if err := lock.Unlock(); err != nil {
-			log.G(ctx).WithField(
-				"bundlePath", bundlePath,
-			).WithError(
-				err,
-			).Error(
-				"unlock disabled status file lock error",
-			)
-		}
-	}()
-	data, err = lock.Read()
-	if err != nil {
-		return nil, err
-	}
-	status := BundleStatus{}
-	if string(data) != "" {
-		_ = json.Unmarshal(data, &status)
-	}
-
-	newStatus, update := mapping(&status)
-	if update {
-		data, err = json.Marshal(newStatus)
-		if err != nil {
-			return nil, err
-		}
-		log.G(ctx).WithField(
-			"bundlePath", bundlePath,
-		).WithField(
-			"newStatus", string(data),
-		).Info(
-			"new status for disabled lock",
-		)
-		if err = lock.Write(data); err != nil {
-			return
-		}
-	}
-	return &status, nil
 }

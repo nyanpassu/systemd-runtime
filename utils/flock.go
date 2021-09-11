@@ -1,71 +1,61 @@
 package utils
 
 import (
-	"io"
+	"context"
 	"os"
 	"syscall"
+
+	"github.com/sirupsen/logrus"
 )
 
-type Flock struct {
-	file *os.File
-}
-
-func NewFlock(file string, flag int, perm os.FileMode) (r Flock, err error) {
-	f, err := os.OpenFile(file, flag, perm)
-	if err != nil {
-		return r, err
-	}
-	r.file = f
-	return
-}
-
-func (l Flock) Lock() error {
-	return syscall.Flock(int(l.file.Fd()), syscall.LOCK_EX)
-}
-
-func (l Flock) Unlock() error {
-	return syscall.Flock(int(l.file.Fd()), syscall.LOCK_UN)
-}
-
-func (l Flock) Close() error {
-	return l.file.Close()
-}
-
-func (l Flock) Read() ([]byte, error) {
-	var size int
-	if info, err := l.file.Stat(); err == nil {
-		size64 := info.Size()
-		if int64(int(size64)) == size64 {
-			size = int(size64)
+func FileNBLock(file *os.File) (bool, error) {
+	if err := syscall.Flock(int(file.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		if err == syscall.EWOULDBLOCK {
+			return false, nil
 		}
+		return false, err
 	}
-	size++
+	return true, nil
+}
 
-	if size < 512 {
-		size = 512
-	}
+func FileBLock(ctx context.Context, file *os.File) error {
+	lockCh := make(chan error, 1)
+	// use another channel to conclude which channel we will select on
+	branchCh := make(chan int, 1)
 
-	data := make([]byte, 0, size)
-	for {
-		if len(data) >= cap(data) {
-			d := append(data[:cap(data)], 0)
-			data = d[:len(data)]
+	go func() {
+		if err := FileLock(file); err != nil {
+			lockCh <- err
+			close(lockCh)
+			return
 		}
-		n, err := l.file.Read(data[len(data):cap(data)])
-		data = data[:len(data)+n]
-		if err != nil {
-			if err == io.EOF {
-				err = nil
+		close(lockCh)
+		// conclude which channel we have selected
+		branch := <-branchCh
+		if branch == 1 {
+			if err := FileUnlock(file); err != nil {
+				logrus.WithField("FileName", file.Name()).WithError(err).Error("unlock filelock error")
 			}
-			return data, err
 		}
-	}
-}
-
-func (l Flock) Write(val []byte) error {
-	if err := l.file.Truncate(0); err != nil {
+	}()
+	select {
+	case <-ctx.Done():
+		branchCh <- 1
+		close(branchCh)
+		return ctx.Err()
+	case err := <-lockCh:
+		branchCh <- 2
+		close(branchCh)
 		return err
 	}
-	_, err := l.file.Write(val)
-	return err
+}
+
+// FileLock blocking
+func FileLock(file *os.File) error {
+	return syscall.Flock(int(file.Fd()), syscall.LOCK_EX)
+}
+
+// FileUnlock blocking
+func FileUnlock(file *os.File) error {
+	return syscall.Flock(int(file.Fd()), syscall.LOCK_UN)
 }
