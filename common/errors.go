@@ -5,5 +5,6 @@ import (
 )
 
 var (
-	ErrBundleDisabled = errors.New("bundle disabled")
+	ErrBundleDisabled           = errors.New("bundle disabled")
+	ErrAquireFifoFileLockFailed = errors.New("aquire fifo file lock failed")
 )

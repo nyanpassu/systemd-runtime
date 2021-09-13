@@ -164,6 +164,13 @@ type CreateShimOpts struct {
 	Shutdown   chan<- interface{}
 }
 
+type StartShimOpts struct {
+	Config     Config
+	CreateShim CreateShim
+	Publisher  *RemoteEventsPublisher
+	SigsCh     chan interface{}
+}
+
 type CreateShim func(context.Context, CreateShimOpts) (ShimService, error)
 
 type Flags struct {
@@ -176,6 +183,7 @@ type Flags struct {
 	address          string
 	containerdBinary string
 	action           string
+	startTimeout     int
 	socketListener   net.Listener
 }
 
@@ -197,6 +205,7 @@ func parseFlags() {
 
 	flag.StringVar(&flags.address, "address", "", "grpc address back to main containerd")
 	flag.StringVar(&flags.containerdBinary, "publish-binary", "containerd", "path to publish binary (used for publishing events)")
+	flag.IntVar(&flags.startTimeout, "start-timeout", 10, "timeout in seconds to start shim")
 
 	flag.Parse()
 	flags.action = flag.Arg(0)
@@ -276,16 +285,6 @@ func run(createShim CreateShim, config Config) error {
 	})
 	ctx := makeContext(logger)
 
-	disabled, err := common.BundleStarted(ctx, flags.bundlePath)
-	if err != nil {
-		return err
-	}
-	if disabled {
-		fmt.Println("bundle disabled, exit.")
-		os.Exit(0)
-		return nil
-	}
-
 	sigsCh := make(chan interface{}, 1)
 	go handleSignals(sigsCh, logger, signals)
 
@@ -299,11 +298,21 @@ func run(createShim CreateShim, config Config) error {
 		}); err != nil {
 			return err
 		}
-		return startShim(ctx, config, createShim, publisher, sigsCh)
+		return startShim(ctx, StartShimOpts{
+			Config:     config,
+			CreateShim: createShim,
+			Publisher:  publisher,
+			SigsCh:     sigsCh,
+		})
 	case "fork-start":
 		return startNewProcessCommand(ctx, ttrpcAddress)
 	default:
-		return startShim(ctx, config, createShim, publisher, sigsCh)
+		return startShim(ctx, StartShimOpts{
+			Config:     config,
+			CreateShim: createShim,
+			Publisher:  publisher,
+			SigsCh:     sigsCh,
+		})
 	}
 }
 
@@ -555,7 +564,21 @@ func initializeSocket(ctx context.Context, opts InitSocketOpts) error {
 	return nil
 }
 
-func startShim(ctx context.Context, config Config, createShim CreateShim, publisher *RemoteEventsPublisher, sigsCh chan interface{}) error {
+func startShim(ctx context.Context, startOpts StartShimOpts) error {
+	bundleStatus, err := common.OpenBundleStatus(flags.bundlePath)
+	if err != nil {
+		return err
+	}
+	exitStatus, err := common.OpenExitStatus(flags.bundlePath)
+	if err != nil {
+		return err
+	}
+	lock := common.BundleLock{
+		BundleStatus: bundleStatus,
+		ExitStatus:   exitStatus,
+	}
+	created, err := lock.LockForShimStart(ctx)
+
 	opts, err := common.LoadOpts(ctx, flags.bundlePath)
 	if err != nil {
 		return err
@@ -566,7 +589,7 @@ func startShim(ctx context.Context, config Config, createShim CreateShim, publis
 	ctx, cancel = context.WithCancel(ctx)
 	go func() {
 		select {
-		case <-sigsCh:
+		case <-startOpts.SigsCh:
 		case <-shimCh:
 		}
 		cancel()
@@ -576,11 +599,11 @@ func startShim(ctx context.Context, config Config, createShim CreateShim, publis
 		logrus.WithError(err).Error("Cleanup error")
 		return err
 	}
-	service, err := createShim(ctx, CreateShimOpts{
+	service, err := startOpts.CreateShim(ctx, CreateShimOpts{
 		ID:         flags.id,
 		BundlePath: flags.bundlePath,
 		CreateOpts: opts,
-		Publisher:  publisher,
+		Publisher:  startOpts.Publisher,
 		Shutdown:   shimCh,
 	})
 	if err != nil {
@@ -592,9 +615,9 @@ func startShim(ctx context.Context, config Config, createShim CreateShim, publis
 		return err
 	}
 	return launch(ctx, ServeOpts{
-		config:    config,
+		config:    startOpts.Config,
 		service:   service,
-		publisher: publisher,
+		publisher: startOpts.Publisher,
 	})
 }
 

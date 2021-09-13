@@ -8,12 +8,19 @@ import (
 	"os/signal"
 	"sync/atomic"
 	"syscall"
+	"time"
 
 	"golang.org/x/sys/unix"
 
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
+
+	"github.com/containerd/containerd/runtime"
 )
+
+type ExitStatus struct {
+	runtime.Exit
+}
 
 func main() {
 
@@ -78,6 +85,17 @@ func main() {
 		block(file)
 	case "nb":
 		nblock(file)
+	case "exit":
+		status := ExitStatus{}
+		status.Pid = uint32(os.Getpid())
+		status.Status = 0
+		status.Timestamp = time.Now()
+		content, err := json.Marshal(&status)
+		if err != nil {
+			logrus.WithError(err).Fatalln("Marshal status error")
+		}
+		logrus.Info(string(content))
+		os.Exit(0)
 	default:
 		logrus.Fatalf("unrecognized action %s", action)
 	}
