@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"io"
 	"os"
+
+	"github.com/sirupsen/logrus"
 )
 
 // FileExists .
@@ -87,4 +89,10 @@ func FileWriteJSON(file *os.File, val interface{}) error {
 		return err
 	}
 	return FileWrite(file, []byte(content))
+}
+
+func FileClose(file *os.File, logger *logrus.Entry) {
+	if err := file.Close(); err != nil {
+		logger.WithError(err).WithField("FileName", file.Name()).Error("close file error")
+	}
 }

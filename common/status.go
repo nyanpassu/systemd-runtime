@@ -7,24 +7,21 @@ import (
 )
 
 const (
-	bundleStatusFileName = "status.lock"
-	exitStatusFileName   = "exit.lock"
+	shimStatusFileName = "shim.status"
+	shimLockFileName   = "shim.lock"
 )
 
-type BundleStatus struct {
+type ShimStatus struct {
 	PID      int
 	Created  bool
 	Disabled bool
+	Exit     *runtime.Exit
 }
 
-func OpenBundleStatus(bundlePath string) (*os.File, error) {
-	return os.OpenFile(bundlePath+"/"+bundleStatusFileName, os.O_RDWR|os.O_CREATE, 0666)
+func OpenShimStatusFile(bundlePath string) (*os.File, error) {
+	return os.OpenFile(bundlePath+"/"+shimStatusFileName, os.O_RDWR|os.O_CREATE, 0666)
 }
 
-type ExitStatus struct {
-	runtime.Exit
-}
-
-func OpenExitStatus(bundlePath string) (*os.File, error) {
-	return os.OpenFile(bundlePath+"/"+exitStatusFileName, os.O_RDWR|os.O_CREATE, 0666)
+func OpenShimLockFile(bundlePath string) (*os.File, error) {
+	return os.OpenFile(bundlePath+"/"+shimLockFileName, os.O_RDWR|os.O_CREATE, 0666)
 }

@@ -16,6 +16,7 @@ import (
 	"github.com/projecteru2/systemd-runtime/common"
 	"github.com/projecteru2/systemd-runtime/systemd"
 	"github.com/projecteru2/systemd-runtime/task"
+	"github.com/projecteru2/systemd-runtime/utils"
 )
 
 type Bundle struct {
@@ -58,7 +59,36 @@ func (b *Bundle) CheckContainerdConfig(
 }
 
 func (b *Bundle) Disable(ctx context.Context) (bool, error) {
-	return common.DisableBundle(ctx, b.path)
+	statusFile, err := common.OpenShimStatusFile(b.path)
+	if err != nil {
+		return false, err
+	}
+	shimLockFile, err := common.OpenShimLockFile(b.path)
+	if err != nil {
+		return false, err
+	}
+	if err := utils.FileLock(ctx, statusFile); err != nil {
+		return false, err
+	}
+	defer func() {
+		if err := utils.FileUnlock(statusFile); err != nil {
+			log.G(ctx).WithError(err).Error("unlock status file error")
+		}
+	}()
+	status := common.ShimStatus{}
+	if _, err := utils.FileReadJSON(statusFile, &status); err != nil {
+		return false, err
+	}
+	if status.Disabled {
+		canLock, err := utils.FileCanLock(shimLockFile)
+		return !canLock, err
+	}
+	status.Disabled = true
+	if err := utils.FileWriteJSON(statusFile, &status); err != nil {
+		return false, err
+	}
+	canLock, err := utils.FileCanLock(shimLockFile)
+	return !canLock, err
 }
 
 func (b *Bundle) Exited(ctx context.Context) (*runtime.Exit, error) {

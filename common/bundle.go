@@ -43,38 +43,43 @@ func ReceiveAddressOverFifo(ctx context.Context, bundlePath string) (string, err
 	return utils.ReceiveContentOverFifo(ctx, AddressFIFOPath(bundlePath))
 }
 
-func DisableBundle(ctx context.Context, bundlePath string) (started bool, err error) {
-	var prev *BundleStatus
-	prev, err = UpdateBundleStatus(ctx, bundlePath, func(prev *BundleStatus) (BundleStatus, bool) {
-		if prev.Disabled {
-			return *prev, false
-		}
-		prev.Disabled = true
-		return *prev, true
-	})
-	if err != nil {
-		return
-	}
-	return prev.Started, nil
-}
-
 func WriteExited(ctx context.Context, bundlePath string, exit *runtime.Exit) (err error) {
-	_, err = UpdateBundleStatus(ctx, bundlePath, func(prev *BundleStatus) (BundleStatus, bool) {
-		prev.Exited = exit
-		return *prev, true
-	})
-	return err
+	statusFile, err := OpenShimStatusFile(bundlePath)
+	if err != nil {
+		return err
+	}
+	if err := utils.FileLock(ctx, statusFile); err != nil {
+		return err
+	}
+	defer func() {
+		if err := utils.FileUnlock(statusFile); err != nil {
+			log.G(ctx).WithError(err).Error("unlock status file error")
+		}
+	}()
+	status := ShimStatus{}
+	if _, err := utils.FileReadJSON(statusFile, &status); err != nil {
+		return err
+	}
+	status.Exit = exit
+	return utils.FileWriteJSON(statusFile, &status)
 }
 
 func ReadExited(ctx context.Context, bundlePath string) (exit *runtime.Exit, err error) {
-	log.G(ctx).WithField("bundlePath", bundlePath).Debug("read exited from file")
-	var prev *BundleStatus
-	status, err := GetBundleStatus(ctx, bundlePath)
+	statusFile, err := OpenShimStatusFile(bundlePath)
 	if err != nil {
 		return nil, err
 	}
-	if status == nil || status.Exited == nil {
-		return nil, ErrTaskNotExited
+	if err := utils.FileLock(ctx, statusFile); err != nil {
+		return nil, err
 	}
-	return prev.Exited, nil
+	defer func() {
+		if err := utils.FileUnlock(statusFile); err != nil {
+			log.G(ctx).WithError(err).Error("unlock status file error")
+		}
+	}()
+	status := ShimStatus{}
+	if _, err := utils.FileReadJSON(statusFile, &status); err != nil {
+		return nil, err
+	}
+	return status.Exit, nil
 }

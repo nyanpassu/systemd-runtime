@@ -1,3 +1,4 @@
+//go:build linux
 // +build linux
 
 /*
@@ -81,7 +82,6 @@ func newShimService(ctx context.Context, opts sysdshim.CreateShimOpts) (sysdshim
 		id:         opts.ID,
 		bundlePath: opts.BundlePath,
 		context:    ctx,
-		meta:       opts.Meta,
 		ec:         reaper.Default.Subscribe(),
 		ep:         ep,
 		shutdown:   opts.Shutdown,
@@ -98,7 +98,7 @@ func newShimService(ctx context.Context, opts sysdshim.CreateShimOpts) (sysdshim
 		s.shimAddress = address
 	}
 
-	if err := s.create(ctx, opts.CreateOpts); err != nil {
+	if err := s.create(ctx, opts.CreateOpts, opts.Created); err != nil {
 		return nil, err
 	}
 	return s, nil
@@ -116,7 +116,6 @@ type service struct {
 	id string
 	// bundle path of shim running on
 	bundlePath string
-	meta       sysdshim.Meta
 
 	status          sysdshim.SyncedServiceStatus
 	sender          *sysdshim.EventSender
@@ -742,7 +741,7 @@ func (s *service) initPlatform() error {
 	return nil
 }
 
-func (s *service) create(ctx context.Context, opts runtime.CreateOpts) error {
+func (s *service) create(ctx context.Context, opts runtime.CreateOpts, created bool) error {
 	topts := opts.TaskOptions
 	if topts == nil {
 		topts = opts.RuntimeOptions
@@ -775,7 +774,7 @@ func (s *service) create(ctx context.Context, opts runtime.CreateOpts) error {
 		logrus.WithField("id", s.id).WithError(err).Error("create new container error")
 		return err
 	}
-	if !s.meta.CreatedEventSent {
+	if !created {
 		s.sender.Send(eventstypes.TaskCreate{
 			ContainerID: request.ID,
 			Bundle:      request.Bundle,
@@ -790,10 +789,6 @@ func (s *service) create(ctx context.Context, opts runtime.CreateOpts) error {
 			Pid:        uint32(pid),
 		})
 		//
-		s.meta.CreatedEventSent = true
-		if err := s.meta.Store(ctx); err != nil {
-			return err
-		}
 	}
 	return nil
 }

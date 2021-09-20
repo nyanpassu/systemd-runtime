@@ -30,11 +30,9 @@ import (
 	"path/filepath"
 	"runtime"
 	"runtime/debug"
-	"strings"
 	"syscall"
 	"time"
 
-	"github.com/containerd/containerd/errdefs"
 	"github.com/containerd/containerd/events"
 	"github.com/containerd/containerd/log"
 	"github.com/containerd/containerd/mount"
@@ -44,18 +42,13 @@ import (
 	"github.com/containerd/containerd/runtime/v2/runc"
 	"github.com/containerd/containerd/runtime/v2/runc/options"
 	shimapi "github.com/containerd/containerd/runtime/v2/task"
+	"github.com/containerd/containerd/sys/reaper"
 	"github.com/containerd/containerd/version"
-	"github.com/containerd/fifo"
-	"github.com/containerd/ttrpc"
 	"github.com/gogo/protobuf/proto"
-	types1 "github.com/gogo/protobuf/types"
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
 
-	"github.com/containerd/containerd/sys/reaper"
 	"golang.org/x/sys/unix"
-
-	"github.com/projecteru2/systemd-runtime/common"
 
 	goRunc "github.com/containerd/go-runc"
 	"github.com/containerd/typeurl"
@@ -65,7 +58,10 @@ import (
 	cgroupsv2 "github.com/containerd/cgroups/v2"
 )
 
-const shimID = "io.containerd.systemd.v1"
+const (
+	shimID          = "io.containerd.systemd.v1"
+	ttrpcAddressEnv = "TTRPC_ADDRESS"
+)
 
 // group labels specifies how the shim groups services.
 // currently supports a runc.v2 specific .group label and the
@@ -83,42 +79,6 @@ type spec struct {
 type Publisher interface {
 	events.Publisher
 	io.Closer
-}
-
-// Init func for the creation of a shim server
-// type Init func(context.Context, string, Publisher, func()) (Shim, error)
-
-type ShimService interface {
-	Start(ctx context.Context, req *shimapi.StartRequest) (*shimapi.StartResponse, error)
-	State(ctx context.Context, req *shimapi.StateRequest) (*shimapi.StateResponse, error)
-	Delete(ctx context.Context, req *shimapi.DeleteRequest) (*shimapi.DeleteResponse, error)
-	Pids(ctx context.Context, req *shimapi.PidsRequest) (*shimapi.PidsResponse, error)
-	Pause(ctx context.Context, req *shimapi.PauseRequest) (*types1.Empty, error)
-	Resume(ctx context.Context, req *shimapi.ResumeRequest) (*types1.Empty, error)
-	Checkpoint(ctx context.Context, req *shimapi.CheckpointTaskRequest) (*types1.Empty, error)
-	Kill(ctx context.Context, req *shimapi.KillRequest) (*types1.Empty, error)
-	Exec(ctx context.Context, req *shimapi.ExecProcessRequest) (*types1.Empty, error)
-	ResizePty(ctx context.Context, req *shimapi.ResizePtyRequest) (*types1.Empty, error)
-	CloseIO(ctx context.Context, req *shimapi.CloseIORequest) (*types1.Empty, error)
-	Update(ctx context.Context, req *shimapi.UpdateTaskRequest) (*types1.Empty, error)
-	Wait(ctx context.Context, req *shimapi.WaitRequest) (*shimapi.WaitResponse, error)
-	Stats(ctx context.Context, req *shimapi.StatsRequest) (*shimapi.StatsResponse, error)
-	Connect(ctx context.Context, req *shimapi.ConnectRequest) (*shimapi.ConnectResponse, error)
-	Shutdown(ctx context.Context, req *shimapi.ShutdownRequest) (*types1.Empty, error)
-}
-
-type TaskService struct {
-	ShimService
-}
-
-func (t TaskService) Create(ctx context.Context, req *shimapi.CreateTaskRequest) (*shimapi.CreateTaskResponse, error) {
-	return nil, errdefs.ErrNotImplemented
-}
-
-func taskService(shimService ShimService) shimapi.TaskService {
-	return TaskService{
-		ShimService: shimService,
-	}
 }
 
 // OptsKey is the context key for the Opts value.
@@ -158,82 +118,21 @@ type Config struct {
 type CreateShimOpts struct {
 	ID         string
 	BundlePath string
-	Meta       Meta
 	Publisher  Publisher
+	Created    bool
 	CreateOpts containerRuntime.CreateOpts
 	Shutdown   chan<- interface{}
 }
 
-type StartShimOpts struct {
-	Config     Config
-	CreateShim CreateShim
-	Publisher  *RemoteEventsPublisher
-	SigsCh     chan interface{}
-}
-
-type CreateShim func(context.Context, CreateShimOpts) (ShimService, error)
-
-type Flags struct {
-	debug            bool
-	version          bool
-	id               string
-	namespace        string
-	socket           string
-	bundlePath       string
-	address          string
-	containerdBinary string
-	action           string
-	startTimeout     int
-	socketListener   net.Listener
-}
-
-var (
-	flags Flags
-)
-
-const (
-	ttrpcAddressEnv = "TTRPC_ADDRESS"
-)
-
-func parseFlags() {
-	flag.BoolVar(&flags.debug, "debug", false, "enable debug output in logs")
-	flag.BoolVar(&flags.version, "v", false, "show the shim version and exit")
-	flag.StringVar(&flags.namespace, "namespace", "", "namespace that owns the shim")
-	flag.StringVar(&flags.id, "id", "", "id of the task")
-	flag.StringVar(&flags.socket, "socket", "", "socket path to serve")
-	flag.StringVar(&flags.bundlePath, "bundle", "", "path to the bundle if not workdir")
-
-	flag.StringVar(&flags.address, "address", "", "grpc address back to main containerd")
-	flag.StringVar(&flags.containerdBinary, "publish-binary", "containerd", "path to publish binary (used for publishing events)")
-	flag.IntVar(&flags.startTimeout, "start-timeout", 10, "timeout in seconds to start shim")
-
-	flag.Parse()
-	flags.action = flag.Arg(0)
-}
-
-func setRuntime() {
-	debug.SetGCPercent(40)
-	go func() {
-		for range time.Tick(30 * time.Second) {
-			debug.FreeOSMemory()
-		}
-	}()
-	if os.Getenv("GOMAXPROCS") == "" {
-		// If GOMAXPROCS hasn't been set, we default to a value of 2 to reduce
-		// the number of Go stacks present in the shim.
-		runtime.GOMAXPROCS(2)
-	}
-}
+type CreateShimService func(context.Context, CreateShimOpts) (ShimService, error)
 
 // Run initializes and runs a shim server
-func Run(create CreateShim, opts ...BinaryOpts) {
-	parseFlags()
-	if flags.version {
-		fmt.Printf("%s:\n", os.Args[0])
-		fmt.Println("  Version: ", version.Version)
-		fmt.Println("  Revision:", version.Revision)
-		fmt.Println("  Go version:", version.GoVersion)
-		fmt.Println("")
+func Run(create CreateShimService, opts ...BinaryOpts) {
+	s := Shim{}
+	if err := s.parseEnvAndFlags(); err != nil {
+		fmt.Fprintf(os.Stderr, "%s: %s\n", shimID, err)
+	}
+	if s.printVersion() {
 		return
 	}
 	setRuntime()
@@ -242,89 +141,144 @@ func Run(create CreateShim, opts ...BinaryOpts) {
 	for _, o := range opts {
 		o(&config)
 	}
-	if err := run(create, config); err != nil {
+
+	if err := s.run(create, config); err != nil {
 		fmt.Fprintf(os.Stderr, "%s: %s\n", shimID, err)
 		os.Exit(1)
 	}
 }
 
-func run(createShim CreateShim, config Config) error {
-	signals, err := setupSignals(config)
+type Shim struct {
+	debug   bool
+	version bool
+	// id the container id
+	id                     string
+	namespace              string
+	socket                 string
+	bundlePath             string
+	containerdGRPCAddress  string
+	containerdTTRPCAddress string
+	containerdBinary       string
+	action                 string
+	startTimeout           int
+	socketListener         net.Listener
+}
+
+func (s *Shim) parseEnvAndFlags() (err error) {
+	flag.BoolVar(&s.debug, "debug", false, "enable debug output in logs")
+	flag.BoolVar(&s.version, "v", false, "show the shim version and exit")
+	flag.StringVar(&s.namespace, "namespace", "", "namespace that owns the shim")
+	flag.StringVar(&s.id, "id", "", "id of the task")
+	flag.StringVar(&s.socket, "socket", "", "socket path to serve")
+	flag.StringVar(&s.bundlePath, "bundle", "", "path to the bundle if not workdir")
+
+	flag.StringVar(&s.containerdGRPCAddress, "address", "", "grpc address back to main containerd")
+	flag.StringVar(&s.containerdBinary, "publish-binary", "containerd", "path to publish binary (used for publishing events)")
+	flag.IntVar(&s.startTimeout, "start-timeout", 10, "timeout in seconds to start shim")
+
+	flag.Parse()
+	s.action = flag.Arg(0)
+
+	if s.bundlePath == "" {
+		if s.bundlePath, err = os.Getwd(); err != nil {
+			return err
+		}
+	}
+	if s.namespace == "" {
+		return errors.New("shim namespace cannot be empty")
+	}
+	s.containerdTTRPCAddress = os.Getenv(ttrpcAddressEnv)
+	if s.containerdTTRPCAddress == "" {
+		return errors.New("ttrpc address cannot be empty")
+	}
+	return nil
+}
+
+func (s *Shim) printVersion() bool {
+	if s.version || s.action == "version" {
+		fmt.Printf("%s:\n", os.Args[0])
+		fmt.Println("  Version: ", version.Version)
+		fmt.Println("  Revision:", version.Revision)
+		fmt.Println("  Go version:", version.GoVersion)
+		fmt.Println("")
+		return true
+	}
+	return false
+}
+
+func (s *Shim) run(createService CreateShimService, config Config) error {
+	signals, err := s.setupSignals(config)
 	if err != nil {
 		return err
 	}
 	if !config.NoSubreaper {
-		if err := subreaper(); err != nil {
-			return err
-		}
-	}
-	if flags.bundlePath == "" {
-		flags.bundlePath, err = os.Getwd()
-		if err != nil {
+		if err := s.subreaper(); err != nil {
 			return err
 		}
 	}
 
-	ttrpcAddress := os.Getenv(ttrpcAddressEnv)
-	publisher, err := NewPublisher(ttrpcAddress)
+	publisher, err := NewPublisher(s.containerdTTRPCAddress)
 	if err != nil {
 		return err
 	}
 	defer publisher.Close()
 
-	if flags.namespace == "" {
-		return fmt.Errorf("shim namespace cannot be empty")
-	}
-
 	logger := logrus.WithFields(logrus.Fields{
-		"id":        flags.id,
+		"id":        s.id,
 		"pid":       os.Getpid(),
-		"path":      flags.bundlePath,
-		"namespace": flags.namespace,
+		"path":      s.bundlePath,
+		"namespace": s.namespace,
 		"runtime":   shimID,
 	})
-	ctx := makeContext(logger)
+	ctx := s.makeContext(logger)
 
 	sigsCh := make(chan interface{}, 1)
-	go handleSignals(sigsCh, logger, signals)
+	go s.handleSignals(sigsCh, logger, signals)
 
-	switch flags.action {
+	switch s.action {
 	case "delete":
-		return deleteCommand(ctx)
+		return s.deleteCommand(ctx)
 	case "start":
-		if err := initializeSocket(ctx, InitSocketOpts{
-			ID:      flags.id,
-			Address: flags.address,
-		}); err != nil {
+		if err := s.initSocket(ctx); err != nil {
 			return err
 		}
-		return startShim(ctx, StartShimOpts{
-			Config:     config,
-			CreateShim: createShim,
-			Publisher:  publisher,
-			SigsCh:     sigsCh,
-		})
+		ss := ShimServer{
+			Shim:      s,
+			Config:    config,
+			Publisher: publisher,
+			SigsCh:    sigsCh,
+		}
+		ch, err := ss.start(ctx, createService)
+		if err != nil {
+			return err
+		}
+		return <-ch
 	case "fork-start":
-		return startNewProcessCommand(ctx, ttrpcAddress)
+		return s.startNewProcessCommand(ctx)
 	default:
-		return startShim(ctx, StartShimOpts{
-			Config:     config,
-			CreateShim: createShim,
-			Publisher:  publisher,
-			SigsCh:     sigsCh,
-		})
+		ss := ShimServer{
+			Shim:      s,
+			Config:    config,
+			Publisher: publisher,
+			SigsCh:    sigsCh,
+		}
+		ch, err := ss.start(ctx, createService)
+		if err != nil {
+			return err
+		}
+		return <-ch
 	}
 }
 
-func makeContext(logger *logrus.Entry) context.Context {
-	ctx := namespaces.WithNamespace(context.Background(), flags.namespace)
-	ctx = context.WithValue(ctx, OptsKey{}, Opts{BundlePath: flags.bundlePath, Debug: flags.debug})
-	return log.WithLogger(ctx, logger)
+func (s *Shim) makeContext(logger *logrus.Entry) context.Context {
+	ctx := log.WithLogger(context.Background(), logger)
+	ctx = namespaces.WithNamespace(ctx, s.namespace)
+	return context.WithValue(ctx, OptsKey{}, Opts{BundlePath: s.bundlePath, Debug: s.debug})
 }
 
 // clean up the whole bundle working directory by command, this will not require a running shim process
-func deleteCommand(ctx context.Context) error {
-	response, err := cleanup(ctx, flags.id)
+func (s *Shim) deleteCommand(ctx context.Context) error {
+	response, err := s.cleanup(ctx)
 	if err != nil {
 		return err
 	}
@@ -338,15 +292,8 @@ func deleteCommand(ctx context.Context) error {
 	return nil
 }
 
-func startNewProcessCommand(ctx context.Context, ttrpcAddress string) error {
-	address, err := startNewProcess(ctx, StartProcessOpts{
-		InitSocketOpts: InitSocketOpts{
-			ID:      flags.id,
-			Address: flags.address,
-		},
-		ContainerdBinary: flags.containerdBinary,
-		TTRPCAddress:     ttrpcAddress,
-	})
+func (s *Shim) startNewProcessCommand(ctx context.Context) error {
+	address, err := s.startNewProcess(ctx)
 	if err != nil {
 		return err
 	}
@@ -358,13 +305,13 @@ func startNewProcessCommand(ctx context.Context, ttrpcAddress string) error {
 
 // Start a command to run shim in new process
 // Create Socket ant write socket address to bundle file
-func startNewProcess(ctx context.Context, opts StartProcessOpts) (_ string, retErr error) {
-	cmd, err := newCommand(ctx, opts.ID, opts.ContainerdBinary, opts.Address, opts.TTRPCAddress)
+func (s *Shim) startNewProcess(ctx context.Context) (_ string, retErr error) {
+	cmd, err := s.newCommand(ctx)
 	if err != nil {
 		return "", err
 	}
-	grouping := opts.ID
-	spec, err := readSpec()
+	grouping := s.id
+	spec, err := s.readSpec()
 	if err != nil {
 		return "", err
 	}
@@ -374,7 +321,7 @@ func startNewProcess(ctx context.Context, opts StartProcessOpts) (_ string, retE
 			break
 		}
 	}
-	address, err := SocketAddress(ctx, opts.Address, grouping)
+	address, err := SocketAddress(ctx, s.containerdGRPCAddress, grouping)
 	if err != nil {
 		return "", err
 	}
@@ -472,376 +419,7 @@ func startNewProcess(ctx context.Context, opts StartProcessOpts) (_ string, retE
 	return address, nil
 }
 
-func newCommand(ctx context.Context, id, containerdBinary, containerdAddress, containerdTTRPCAddress string) (*exec.Cmd, error) {
-	ns, err := namespaces.NamespaceRequired(ctx)
-	if err != nil {
-		return nil, err
-	}
-	self, err := os.Executable()
-	if err != nil {
-		return nil, err
-	}
-	cwd, err := os.Getwd()
-	if err != nil {
-		return nil, err
-	}
-	args := []string{
-		"-namespace", ns,
-		"-id", id,
-		"-address", containerdAddress,
-	}
-	cmd := exec.Command(self, args...)
-	cmd.Dir = cwd
-	cmd.Env = append(os.Environ(), "GOMAXPROCS=4")
-	cmd.SysProcAttr = &syscall.SysProcAttr{
-		Setpgid: true,
-	}
-	return cmd, nil
-}
-
-func initializeSocket(ctx context.Context, opts InitSocketOpts) error {
-	// logrus.WithError(err).Warn("failed to remove runc container")
-	var (
-		retErr  error
-		address string
-	)
-
-	grouping := opts.ID
-	spec, err := readSpec()
-	if err != nil {
-		return err
-	}
-	for _, group := range groupLabels {
-		if groupID, ok := spec.Annotations[group]; ok {
-			grouping = groupID
-			break
-		}
-	}
-	address, err = SocketAddress(ctx, opts.Address, grouping)
-	if err != nil {
-		return err
-	}
-
-	socket, err := NewSocket(address)
-	if err != nil {
-		// the only time where this would happen is if there is a bug and the socket
-		// was not cleaned up in the cleanup method of the shim or we are using the
-		// grouping functionality where the new process should be run with the same
-		// shim as an existing container
-		if !SocketEaddrinuse(err) {
-			return errors.Wrapf(err, "create new shim socket")
-		}
-		if CanConnect(address) {
-			if err := WriteAddress("address", address); err != nil {
-				return errors.Wrapf(err, "write existing socket for shim")
-			}
-			// original code is return address, nil, nil
-			// don't know when and how will get us here
-			flags.socket = address
-			return nil
-		}
-		if err := RemoveSocket(address); err != nil {
-			return errors.Wrapf(err, "remove pre-existing socket")
-		}
-		if socket, err = NewSocket(address); err != nil {
-			return errors.Wrapf(err, "try create new shim socket 2x")
-		}
-	}
-
-	defer func() {
-		if retErr != nil {
-			socket.Close()
-			_ = RemoveSocket(address)
-		}
-	}()
-
-	if err := WriteAddress("address", address); err != nil {
-		return err
-	}
-
-	flags.socket = address
-	flags.socketListener = socket
-	return nil
-}
-
-func startShim(ctx context.Context, startOpts StartShimOpts) error {
-	bundleStatus, err := common.OpenBundleStatus(flags.bundlePath)
-	if err != nil {
-		return err
-	}
-	exitStatus, err := common.OpenExitStatus(flags.bundlePath)
-	if err != nil {
-		return err
-	}
-	lock := common.BundleLock{
-		BundleStatus: bundleStatus,
-		ExitStatus:   exitStatus,
-	}
-	created, err := lock.LockForShimStart(ctx)
-
-	opts, err := common.LoadOpts(ctx, flags.bundlePath)
-	if err != nil {
-		return err
-	}
-
-	shimCh := make(chan interface{}, 1)
-	var cancel func()
-	ctx, cancel = context.WithCancel(ctx)
-	go func() {
-		select {
-		case <-startOpts.SigsCh:
-		case <-shimCh:
-		}
-		cancel()
-	}()
-
-	if _, err := cleanup(ctx, flags.id); err != nil {
-		logrus.WithError(err).Error("Cleanup error")
-		return err
-	}
-	service, err := startOpts.CreateShim(ctx, CreateShimOpts{
-		ID:         flags.id,
-		BundlePath: flags.bundlePath,
-		CreateOpts: opts,
-		Publisher:  startOpts.Publisher,
-		Shutdown:   shimCh,
-	})
-	if err != nil {
-		return err
-	}
-	if _, err = service.Start(ctx, &shimapi.StartRequest{
-		ID: flags.id,
-	}); err != nil {
-		return err
-	}
-	return launch(ctx, ServeOpts{
-		config:    startOpts.Config,
-		service:   service,
-		publisher: startOpts.Publisher,
-	})
-}
-
-func cleanup(ctx context.Context, id string) (*shimapi.DeleteResponse, error) {
-	log.G(ctx).WithField("id", id).Info("Begin Cleanup")
-	cwd, err := os.Getwd()
-	if err != nil {
-		return nil, err
-	}
-	path := filepath.Join(filepath.Dir(cwd), id)
-	ns, err := namespaces.NamespaceRequired(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	runtime := "/usr/bin/runc"
-
-	logrus.WithField("id", id).Info("ReadOptions")
-	opts, err := runc.ReadOptions(path)
-	if err != nil {
-		return nil, err
-	}
-	root := process.RuncRoot
-	if opts != nil && opts.Root != "" {
-		root = opts.Root
-	}
-
-	logrus.WithField("runtime", runtime).WithField("ns", ns).WithField("root", root).WithField("path", path).Info("NewRunc")
-	r := newRunc(root, path, ns, runtime, "", false)
-
-	logrus.WithField("id", id).Info("Runc Delete")
-	if err := r.Delete(ctx, id, &goRunc.DeleteOpts{
-		Force: true,
-	}); err != nil {
-		logrus.WithError(err).Warn("failed to remove runc container")
-	}
-	logrus.Info("UnmountAll")
-	if err := mount.UnmountAll(filepath.Join(path, "rootfs"), 0); err != nil {
-		logrus.WithError(err).Warn("failed to cleanup rootfs mount")
-	}
-	logrus.Info("Cleanup complete")
-
-	return &shimapi.DeleteResponse{
-		ExitedAt:   time.Now(),
-		ExitStatus: 128 + uint32(unix.SIGKILL),
-	}, nil
-}
-
-type ServeOpts struct {
-	config    Config
-	service   ShimService
-	publisher *RemoteEventsPublisher
-}
-
-func launch(ctx context.Context, opts ServeOpts) error {
-	logrus.Info("Launch")
-	if !opts.config.NoSetupLogger {
-		if err := setLogger(ctx, flags.id); err != nil {
-			return err
-		}
-	}
-
-	if err := serveShim(ctx, opts); err != nil {
-		if err != context.Canceled {
-			return err
-		}
-	}
-	select {
-	case <-opts.publisher.Done():
-		return nil
-	case <-time.After(5 * time.Second):
-		return errors.New("publisher not closed")
-	}
-}
-
-// Serve the shim server
-func serveShim(ctx context.Context, opts ServeOpts) error {
-	logger := log.G(ctx)
-
-	dump := make(chan os.Signal, 32)
-	setupDumpStacks(dump)
-
-	server, err := newServer()
-	if err != nil {
-		return errors.Wrap(err, "failed creating server")
-	}
-
-	logrus.Info("registering ttrpc server")
-	shimapi.RegisterTaskService(server, TaskService{opts.service})
-
-	if err := serveTTRPC(ctx, server, flags.socket); err != nil {
-		logrus.Error("serve error")
-		return err
-	}
-	go func() {
-		for range dump {
-			dumpStacks(logger)
-		}
-	}()
-	<-ctx.Done()
-	return ctx.Err()
-}
-
-func setLogger(ctx context.Context, id string) error {
-	logrus.SetFormatter(&logrus.TextFormatter{
-		TimestampFormat: log.RFC3339NanoFixed,
-		FullTimestamp:   true,
-	})
-	if flags.debug {
-		logrus.SetLevel(logrus.DebugLevel)
-	}
-	f, err := openLog(ctx, id)
-	if err != nil {
-		return err
-	}
-	logrus.SetOutput(f)
-	return nil
-}
-
-func openLog(ctx context.Context, _ string) (io.Writer, error) {
-	return fifo.OpenFifoDup2(ctx, "log", unix.O_WRONLY, 0700, int(os.Stderr.Fd()))
-}
-
-// serve serves the ttrpc API over a unix socket at the provided path
-// this function does not block
-func serveTTRPC(ctx context.Context, server *ttrpc.Server, path string) error {
-	wd, err := os.Getwd()
-	if err != nil {
-		return err
-	}
-
-	go func() {
-		for {
-			// send address over fifo
-			_ = common.SendAddressOverFifo(context.Background(), wd, path)
-		}
-	}()
-
-	var (
-		l net.Listener
-	)
-	if flags.socketListener == nil {
-		l, err = serveListener(path)
-		if err != nil {
-			logrus.Errorf("serveListener failed, path = %s", path)
-			return err
-		}
-	} else {
-		l = flags.socketListener
-	}
-
-	go func() {
-		if err := server.Serve(ctx, l); err != nil &&
-			!strings.Contains(err.Error(), "use of closed network connection") {
-			logrus.WithError(err).Fatal("containerd-shim: ttrpc server failure")
-		}
-		l.Close()
-		if address, err := ReadAddress("address"); err == nil {
-			_ = RemoveSocket(address)
-		}
-
-	}()
-	return nil
-}
-
-func dumpStacks(logger *logrus.Entry) {
-	var (
-		buf       []byte
-		stackSize int
-	)
-	bufferLen := 16384
-	for stackSize == len(buf) {
-		buf = make([]byte, bufferLen)
-		stackSize = runtime.Stack(buf, true)
-		bufferLen *= 2
-	}
-	buf = buf[:stackSize]
-	logger.Infof("=== BEGIN goroutine stack dump ===\n%s\n=== END goroutine stack dump ===", buf)
-}
-
-type InitServiceOpts struct {
-	service    ShimService
-	id         string
-	bundlePath string
-}
-
-// setupSignals creates a new signal handler for all signals and sets the shim as a
-// sub-reaper so that the container processes are reparented
-func setupSignals(config Config) (chan os.Signal, error) {
-	signals := make(chan os.Signal, 32)
-	smp := []os.Signal{unix.SIGTERM, unix.SIGINT, unix.SIGPIPE}
-	if !config.NoReaper {
-		smp = append(smp, unix.SIGCHLD)
-	}
-	signal.Notify(signals, smp...)
-	return signals, nil
-}
-
-func setupDumpStacks(dump chan<- os.Signal) {
-	signal.Notify(dump, syscall.SIGUSR1)
-}
-
-func serveListener(path string) (net.Listener, error) {
-	var (
-		l   net.Listener
-		err error
-	)
-	if path == "" {
-		l, err = net.FileListener(os.NewFile(3, "socket"))
-		path = "[inherited from parent]"
-	} else {
-		if len(path) > socketPathLimit {
-			return nil, errors.Errorf("%q: unix socket path too long (> %d)", path, socketPathLimit)
-		}
-		l, err = net.Listen("unix", path)
-	}
-	if err != nil {
-		return nil, err
-	}
-	logrus.WithField("socket", path).Debug("serving api on socket")
-	return l, nil
-}
-
-func handleSignals(ch chan<- interface{}, logger *logrus.Entry, signals chan os.Signal) {
+func (s *Shim) handleSignals(ch chan<- interface{}, logger *logrus.Entry, signals chan os.Signal) {
 	logger.Info("starting signal loop")
 	count := 0
 
@@ -866,23 +444,182 @@ func handleSignals(ch chan<- interface{}, logger *logrus.Entry, signals chan os.
 	}
 }
 
-func newServer() (*ttrpc.Server, error) {
-	return ttrpc.NewServer(ttrpc.WithServerHandshaker(ttrpc.UnixSocketRequireSameUser()))
+func (s *Shim) newCommand(ctx context.Context) (*exec.Cmd, error) {
+	ns, err := namespaces.NamespaceRequired(ctx)
+	if err != nil {
+		return nil, err
+	}
+	self, err := os.Executable()
+	if err != nil {
+		return nil, err
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		return nil, err
+	}
+	args := []string{
+		"-namespace", ns,
+		"-id", s.id,
+		"-address", s.containerdGRPCAddress,
+	}
+	cmd := exec.Command(self, args...)
+	cmd.Dir = cwd
+	cmd.Env = append(os.Environ(), "GOMAXPROCS=4")
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		Setpgid: true,
+	}
+	return cmd, nil
 }
 
-func subreaper() error {
+func (s *Shim) initSocket(ctx context.Context) error {
+	// logrus.WithError(err).Warn("failed to remove runc container")
+	var (
+		retErr  error
+		address string
+	)
+
+	grouping := s.id
+	spec, err := s.readSpec()
+	if err != nil {
+		return err
+	}
+	for _, group := range groupLabels {
+		if groupID, ok := spec.Annotations[group]; ok {
+			grouping = groupID
+			break
+		}
+	}
+	address, err = SocketAddress(ctx, s.containerdGRPCAddress, grouping)
+	if err != nil {
+		return err
+	}
+
+	socket, err := NewSocket(address)
+	if err != nil {
+		// the only time where this would happen is if there is a bug and the socket
+		// was not cleaned up in the cleanup method of the shim or we are using the
+		// grouping functionality where the new process should be run with the same
+		// shim as an existing container
+		if !SocketEaddrinuse(err) {
+			return errors.Wrapf(err, "create new shim socket")
+		}
+		if CanConnect(address) {
+			if err := WriteAddress("address", address); err != nil {
+				return errors.Wrapf(err, "write existing socket for shim")
+			}
+			// original code is return address, nil, nil
+			// don't know when and how will get us here
+			s.socket = address
+			return nil
+		}
+		if err := RemoveSocket(address); err != nil {
+			return errors.Wrapf(err, "remove pre-existing socket")
+		}
+		if socket, err = NewSocket(address); err != nil {
+			return errors.Wrapf(err, "try create new shim socket 2x")
+		}
+	}
+
+	defer func() {
+		if retErr != nil {
+			socket.Close()
+			_ = RemoveSocket(address)
+		}
+	}()
+
+	if err := WriteAddress("address", address); err != nil {
+		return err
+	}
+
+	s.socket = address
+	s.socketListener = socket
+	return nil
+}
+
+// setupSignals creates a new signal handler for all signals and sets the shim as a
+// sub-reaper so that the container processes are reparented
+func (s *Shim) setupSignals(config Config) (chan os.Signal, error) {
+	signals := make(chan os.Signal, 32)
+	smp := []os.Signal{unix.SIGTERM, unix.SIGINT, unix.SIGPIPE}
+	if !config.NoReaper {
+		smp = append(smp, unix.SIGCHLD)
+	}
+	signal.Notify(signals, smp...)
+	return signals, nil
+}
+
+func (s *Shim) cleanup(ctx context.Context) (*shimapi.DeleteResponse, error) {
+	log.G(ctx).WithField("id", s.id).Info("Begin Cleanup")
+	cwd, err := os.Getwd()
+	if err != nil {
+		return nil, err
+	}
+	path := filepath.Join(filepath.Dir(cwd), s.id)
+	ns, err := namespaces.NamespaceRequired(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	runtime := "/usr/bin/runc"
+
+	logrus.WithField("id", s.id).Info("ReadOptions")
+	opts, err := runc.ReadOptions(path)
+	if err != nil {
+		return nil, err
+	}
+	root := process.RuncRoot
+	if opts != nil && opts.Root != "" {
+		root = opts.Root
+	}
+
+	logrus.WithField("runtime", runtime).WithField("ns", ns).WithField("root", root).WithField("path", path).Info("NewRunc")
+	r := newRunc(root, path, ns, runtime, "", false)
+
+	logrus.WithField("id", s.id).Info("Runc Delete")
+	if err := r.Delete(ctx, s.id, &goRunc.DeleteOpts{
+		Force: true,
+	}); err != nil {
+		logrus.WithError(err).Warn("failed to remove runc container")
+	}
+	logrus.Info("UnmountAll")
+	if err := mount.UnmountAll(filepath.Join(path, "rootfs"), 0); err != nil {
+		logrus.WithError(err).Warn("failed to cleanup rootfs mount")
+	}
+	logrus.Info("Cleanup complete")
+
+	return &shimapi.DeleteResponse{
+		ExitedAt:   time.Now(),
+		ExitStatus: 128 + uint32(unix.SIGKILL),
+	}, nil
+}
+
+func (s *Shim) subreaper() error {
 	return reaper.SetSubreaper(1)
 }
 
-func readSpec() (*spec, error) {
+func (s *Shim) readSpec() (*spec, error) {
 	f, err := os.Open("config.json")
 	if err != nil {
 		return nil, err
 	}
 	defer f.Close()
-	var s spec
+	var spec spec
 	if err := json.NewDecoder(f).Decode(&s); err != nil {
 		return nil, err
 	}
-	return &s, nil
+	return &spec, nil
+}
+
+func setRuntime() {
+	debug.SetGCPercent(40)
+	go func() {
+		for range time.Tick(30 * time.Second) {
+			debug.FreeOSMemory()
+		}
+	}()
+	if os.Getenv("GOMAXPROCS") == "" {
+		// If GOMAXPROCS hasn't been set, we default to a value of 2 to reduce
+		// the number of Go stacks present in the shim.
+		runtime.GOMAXPROCS(2)
+	}
 }

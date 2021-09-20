@@ -12,7 +12,6 @@ import (
 
 	"golang.org/x/sys/unix"
 
-	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
 
 	"github.com/containerd/containerd/runtime"
@@ -26,11 +25,6 @@ func main() {
 
 	pid := os.Getpid()
 	logrus.Infof("pid = %d", pid)
-
-	dir, err := os.Getwd()
-	if err != nil {
-		logrus.Fatalln(errors.Wrap(err, "get wd error"))
-	}
 
 	signals := make(chan os.Signal, 32)
 	signal.Notify(signals, []os.Signal{unix.SIGTERM, unix.SIGINT}...)
@@ -70,7 +64,7 @@ func main() {
 	var (
 		file *os.File
 	)
-	file, err = os.OpenFile(dir+"/"+"test.lock", os.O_RDWR|os.O_CREATE, 0666)
+	file, err := os.OpenFile("test.lock", os.O_RDWR|os.O_CREATE, 0666)
 	if err != nil {
 		logrus.WithError(err).Fatalln("open file failed")
 	}
