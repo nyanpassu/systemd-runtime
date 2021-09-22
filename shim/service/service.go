@@ -139,7 +139,7 @@ func (s *service) Create(ctx context.Context, r *taskAPI.CreateTaskRequest) (_ *
 		return nil, err
 	}
 
-	s.sender.Send(eventstypes.TaskCreate{
+	s.sender.SendEventCreate(&eventstypes.TaskCreate{
 		ContainerID: r.ID,
 		Bundle:      r.Bundle,
 		Rootfs:      r.Rootfs,
@@ -166,10 +166,11 @@ func (s *service) Start(ctx context.Context, r *taskAPI.StartRequest) (*taskAPI.
 	}
 	defer release()
 
-	send, cancel := s.sender.PrepareSendL()
+	sender := s.sender.PrepareSendL()
+	defer sender.Cancel()
+
 	p, err := container.Start(ctx, r)
 	if err != nil {
-		cancel()
 		return nil, errdefs.ToGRPC(err)
 	}
 
@@ -198,12 +199,12 @@ func (s *service) Start(ctx context.Context, r *taskAPI.StartRequest) (*taskAPI.
 			}
 		}
 
-		send(eventstypes.TaskStart{
+		sender.SendTaskStart(&eventstypes.TaskStart{
 			ContainerID: container.ID,
 			Pid:         uint32(p.Pid()),
 		})
 	default:
-		send(eventstypes.TaskExecStarted{
+		sender.SendExecStart(&eventstypes.TaskExecStarted{
 			ContainerID: container.ID,
 			ExecID:      r.ExecID,
 			Pid:         uint32(p.Pid()),
@@ -260,7 +261,7 @@ func (s *service) Exec(ctx context.Context, r *taskAPI.ExecProcessRequest) (*pty
 		return nil, errdefs.ToGRPC(err)
 	}
 
-	s.sender.Send(&eventstypes.TaskExecAdded{
+	s.sender.SendEventExecAdded(&eventstypes.TaskExecAdded{
 		ContainerID: container.ID,
 		ExecID:      process.ID(),
 	})
@@ -340,7 +341,7 @@ func (s *service) Pause(ctx context.Context, r *taskAPI.PauseRequest) (*ptypes.E
 	if err := container.Pause(ctx); err != nil {
 		return nil, errdefs.ToGRPC(err)
 	}
-	s.sender.Send(&eventstypes.TaskPaused{
+	s.sender.SendEventPaused(&eventstypes.TaskPaused{
 		ContainerID: container.ID,
 	})
 	return empty, nil
@@ -357,7 +358,7 @@ func (s *service) Resume(ctx context.Context, r *taskAPI.ResumeRequest) (*ptypes
 	if err := container.Resume(ctx); err != nil {
 		return nil, errdefs.ToGRPC(err)
 	}
-	s.sender.Send(&eventstypes.TaskResumed{
+	s.sender.SendEventResumed(&eventstypes.TaskResumed{
 		ContainerID: container.ID,
 	})
 	return empty, nil
@@ -686,7 +687,7 @@ func (s *service) checkProcesses(e goRunc.Exit) {
 		p.SetExited(e.Status)
 
 		if e.Pid != container.Pid() {
-			s.sender.SendL(&eventstypes.TaskExit{
+			s.sender.SendEventExit(&eventstypes.TaskExit{
 				ContainerID: container.ID,
 				ID:          p.ID(),
 				Pid:         uint32(e.Pid),
@@ -695,7 +696,7 @@ func (s *service) checkProcesses(e goRunc.Exit) {
 			})
 			return
 		}
-		s.sender.SendEventContainerExit(eventstypes.TaskExit{
+		s.sender.SendEventContainerExit(&eventstypes.TaskExit{
 			ContainerID: container.ID,
 			ID:          p.ID(),
 			Pid:         0,
@@ -775,7 +776,7 @@ func (s *service) create(ctx context.Context, opts runtime.CreateOpts, created b
 		return err
 	}
 	if !created {
-		s.sender.Send(eventstypes.TaskCreate{
+		s.sender.SendEventCreate(&eventstypes.TaskCreate{
 			ContainerID: request.ID,
 			Bundle:      request.Bundle,
 			Rootfs:      request.Rootfs,
