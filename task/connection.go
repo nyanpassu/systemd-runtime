@@ -108,9 +108,9 @@ func (h *ServiceHolder) getNextService() (
 }
 
 type ConnMng struct {
-	id         string
-	namespace  string
-	bundlePath string
+	id        string
+	namespace string
+	bundle    common.Bundle
 
 	sync.Mutex
 	cancel  *utils.Once
@@ -150,6 +150,14 @@ func (s *ConnMng) killed() bool {
 
 func (s *ConnMng) connect() {
 	for {
+		disabled, running, err := s.bundle.Disabled(context.Background())
+		if err == nil {
+			if disabled && !running {
+				s.holder.Close()
+				return
+			}
+		}
+
 		if s.doConnect(waitInterval, connTimeout) {
 			return
 		}
@@ -165,7 +173,7 @@ func (s *ConnMng) getAddr(timeout time.Duration) (string, error) {
 	c := s.setCancel(cancel)
 	defer c.Run()
 
-	return common.ReceiveAddressOverFifo(ctx, s.bundlePath)
+	return common.ReceiveAddressOverFifo(ctx, s.bundle.Path())
 }
 
 func (s *ConnMng) setCancel(cancel func()) *utils.Once {

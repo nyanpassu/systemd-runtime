@@ -24,7 +24,8 @@ type Bundle interface {
 	Namespace() string
 	Path() string
 	Delete(context.Context) error
-	Disable(context.Context) (bool, error)
+	Disable(context.Context) (bool, *ShimStatus, error)
+	Disabled(context.Context) (disabled bool, running bool, err error)
 	Exited(context.Context) (*runtime.Exit, error)
 	LoadTask(context.Context, *exchange.Exchange) (runtime.Task, error)
 	SaveOpts(context.Context, runtime.CreateOpts) error

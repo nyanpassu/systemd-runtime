@@ -24,7 +24,7 @@ var (
 type LateInit struct {
 	bundle common.Bundle
 	unit   *systemd.Unit
-	events *exchange.Exchange
+	// events *exchange.Exchange
 
 	conn   ConnMng
 	holder ServiceHolder
@@ -39,7 +39,7 @@ func NewTask(b common.Bundle, unit *systemd.Unit, events *exchange.Exchange) run
 		unit:   unit,
 	}
 	t.conn.id = t.bundle.ID()
-	t.conn.bundlePath = t.bundle.Path()
+	t.conn.bundle = t.bundle
 	t.conn.namespace = t.bundle.Namespace()
 	t.conn.holder = &t.holder
 
@@ -105,47 +105,33 @@ func (t *LateInit) Kill(ctx context.Context, sig uint32, all bool) (err error) {
 	logger.Debug(
 		"kill volatile task",
 	)
-	defer func() {
-		if err == nil {
-			// t.events.Publish(ctx, runtime.TaskExitEventTopic, &eventstypes.TaskExit{
-			// 	ContainerID: t.ID(),
-			// 	ID:          t.ID(),
-			// 	Pid:         0,
-			// 	ExitStatus:  0,
-			// 	ExitedAt:    time.Now(),
-			// })
-
-			// events.Publish(ctx, runtime.TaskDeleteEventTopic, &eventstypes.TaskDelete{
-			//   ContainerID: id,
-			//   Pid:         pid,
-			//   ExitStatus:  exitStatus,
-			//   ExitedAt:    exitedAt,
-			// })
-		}
-	}()
 
 	if err = t.unit.DisableIfPresent(ctx); err != nil {
 		return err
 	}
 
-	var started bool
-	started, err = t.bundle.Disable(ctx)
+	running, status, err := t.bundle.Disable(ctx)
 	if err != nil {
 		logger.WithError(err).Error("[LateInit Kill] disable bundle error")
 		return err
 	}
 
-	if !started {
+	if !running {
+		logger.Info("shim process is not running, read exit status from status file")
 		t.conn.killNow(sig, all)
-		exited := &runtime.Exit{
-			Pid:       0,
-			Status:    0,
-			Timestamp: time.Now(),
+		if status.Exit != nil {
+			t.setExited(status.Exit)
+		} else {
+			t.setExited(&runtime.Exit{
+				Pid:       0,
+				Status:    0,
+				Timestamp: time.Now(),
+			})
 		}
-		t.setExited(exited)
 		return nil
 	}
 
+	logger.Info("shim process is running, kill process")
 	t.conn.kill(sig, all)
 	return t.unit.Stop(ctx)
 }
@@ -209,7 +195,18 @@ func (t *LateInit) Wait(ctx context.Context) (*runtime.Exit, error) {
 		if exited := t.getExited(); exited != nil {
 			return exited, nil
 		}
-		return t.bundle.Exited(ctx)
+		exited, err := t.bundle.Exited(ctx)
+		if err != nil {
+			return nil, err
+		}
+		if exited == nil {
+			exited = &runtime.Exit{
+				Pid:       0,
+				Status:    0,
+				Timestamp: time.Now(),
+			}
+		}
+		return exited, nil
 	}
 	if err != nil {
 		return nil, err

@@ -58,37 +58,37 @@ func (b *Bundle) CheckContainerdConfig(
 	return nil
 }
 
-func (b *Bundle) Disable(ctx context.Context) (bool, error) {
+func (b *Bundle) Disable(ctx context.Context) (running bool, status *common.ShimStatus, err error) {
 	statusFile, err := common.OpenShimStatusFile(b.path)
 	if err != nil {
-		return false, err
+		return false, nil, err
 	}
 	shimLockFile, err := common.OpenShimLockFile(b.path)
 	if err != nil {
-		return false, err
+		return false, nil, err
 	}
 	if err := utils.FileLock(ctx, statusFile); err != nil {
-		return false, err
+		return false, nil, err
 	}
 	defer func() {
 		if err := utils.FileUnlock(statusFile); err != nil {
 			log.G(ctx).WithError(err).Error("unlock status file error")
 		}
 	}()
-	status := common.ShimStatus{}
-	if _, err := utils.FileReadJSON(statusFile, &status); err != nil {
-		return false, err
+	status = &common.ShimStatus{}
+	if _, err := utils.FileReadJSON(statusFile, status); err != nil {
+		return false, nil, err
 	}
 	if status.Disabled {
 		canLock, err := utils.FileCanLock(shimLockFile)
-		return !canLock, err
+		return !canLock, status, err
 	}
 	status.Disabled = true
 	if err := utils.FileWriteJSON(statusFile, &status); err != nil {
-		return false, err
+		return false, nil, err
 	}
 	canLock, err := utils.FileCanLock(shimLockFile)
-	return !canLock, err
+	return !canLock, status, err
 }
 
 func (b *Bundle) Exited(ctx context.Context) (*runtime.Exit, error) {
@@ -96,6 +96,14 @@ func (b *Bundle) Exited(ctx context.Context) (*runtime.Exit, error) {
 }
 
 func (b *Bundle) LoadTask(ctx context.Context, events *exchange.Exchange) (runtime.Task, error) {
+	disabled, running, err := b.Disabled(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if disabled && !running {
+		return nil, common.ErrBundleDisabled
+	}
+
 	unit, err := systemd.GetUnit(ctx, systemd.UnitName(b.id))
 	if err != nil {
 		if !os.IsNotExist(err) {
@@ -117,7 +125,7 @@ func (b *Bundle) CreateSystemdUnit(ctx context.Context, opts runtime.CreateOpts)
 	if logrus.GetLevel() == logrus.DebugLevel {
 		args = append(args, "-debug")
 	}
-	args = append(args, "systemd-start")
+	args = append(args, "start")
 
 	cmd, err := common.SystemdCommand(b.namespace, opts.Runtime, b.containerdAddress, b.containerdTTRPCAddress, b.path, nil, args...)
 	if err != nil {
@@ -159,6 +167,31 @@ func (b *Bundle) IntoDetail() systemd.Detail {
 			WantedBy: "multi-user.target",
 		},
 	}
+}
+
+func (b *Bundle) Disabled(ctx context.Context) (disabled bool, running bool, err error) {
+	statusFile, err := common.OpenShimStatusFile(b.path)
+	if err != nil {
+		return false, false, err
+	}
+	shimLockFile, err := common.OpenShimLockFile(b.path)
+	if err != nil {
+		return false, false, err
+	}
+	if err := utils.FileLock(ctx, statusFile); err != nil {
+		return false, false, err
+	}
+	defer func() {
+		if err := utils.FileUnlock(statusFile); err != nil {
+			log.G(ctx).WithError(err).Error("unlock status file error")
+		}
+	}()
+	status := &common.ShimStatus{}
+	if _, err := utils.FileReadJSON(statusFile, status); err != nil {
+		return false, false, err
+	}
+	canLock, err := utils.FileCanLock(shimLockFile)
+	return status.Disabled, !canLock, err
 }
 
 func (b *Bundle) recreateSystemdUnit(ctx context.Context) (*systemd.Unit, error) {

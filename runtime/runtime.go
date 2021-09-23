@@ -191,6 +191,8 @@ func (m *taskManager) loadingTask(ctx context.Context, id, ns string) (err error
 
 	defer func() {
 		if err != nil {
+			log.G(ctx).WithError(err).Error("loading task error, delete bundle")
+
 			if err := b.Delete(ctx); err != nil {
 				log.G(ctx).WithField(
 					"state", m.state,

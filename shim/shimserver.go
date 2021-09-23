@@ -72,6 +72,10 @@ func (ss *ShimServer) createService(
 	if _, err := utils.FileReadJSON(statusFile, &status); err != nil {
 		return nil, err
 	}
+	if status.Disabled {
+		return nil, common.ErrBundleDisabled
+	}
+
 	ss.shimLockFile, err = ss.getAndLockFile(ctx, func() (*os.File, error) {
 		return common.OpenShimLockFile(ss.Shim.bundlePath)
 	})

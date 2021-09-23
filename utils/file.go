@@ -76,6 +76,7 @@ func FileRead(file *os.File) ([]byte, error) {
 }
 
 func FileWrite(file *os.File, val []byte) error {
+	logrus.WithField("val", val).Info("FileWrite")
 	if err := file.Truncate(0); err != nil {
 		return err
 	}
@@ -88,7 +89,7 @@ func FileWriteJSON(file *os.File, val interface{}) error {
 	if err != nil {
 		return err
 	}
-	return FileWrite(file, []byte(content))
+	return FileWrite(file, content)
 }
 
 func FileClose(file *os.File, logger *logrus.Entry) {
