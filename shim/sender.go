@@ -23,10 +23,9 @@ func NewEventSender() *EventSender {
 	}
 }
 
-func (s *EventSender) SetPublisher(ctx context.Context, publisher Publisher) {
+func (s *EventSender) SetPublisher(namespace string, publisher Publisher) {
 	go func() {
-		ns, _ := namespaces.Namespace(ctx)
-		ctx = namespaces.WithNamespace(context.Background(), ns)
+		ctx := namespaces.WithNamespace(context.Background(), namespace)
 		for e := range s.events {
 			err := publisher.Publish(ctx, runc.GetTopic(e), e)
 			if err != nil {

@@ -12,10 +12,6 @@ const (
 	defaultLockInterval = time.Duration(100) * time.Millisecond
 )
 
-type FileLockOpts struct {
-	Interval time.Duration
-}
-
 func FileCanLock(file *os.File) (bool, error) {
 	flock_t := syscall.Flock_t{
 		Start:  0,
@@ -30,12 +26,9 @@ func FileCanLock(file *os.File) (bool, error) {
 }
 
 // FileLock only accept zero or one FileLockOpts
-func FileLock(ctx context.Context, file *os.File, opts ...FileLockOpts) error {
-	var opt FileLockOpts
-	if len(opts) == 0 {
-		opt.Interval = defaultLockInterval
-	} else {
-		opt = opts[0]
+func FileLock(ctx context.Context, file *os.File, interval time.Duration) error {
+	if interval == 0 {
+		interval = defaultLockInterval
 	}
 	for {
 		if succ, err := FileNBLock(file); err != nil {
@@ -46,7 +39,7 @@ func FileLock(ctx context.Context, file *os.File, opts ...FileLockOpts) error {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-time.After(opt.Interval):
+		case <-time.After(interval):
 		}
 	}
 }

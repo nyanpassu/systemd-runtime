@@ -110,7 +110,7 @@ func (t *LateInit) Kill(ctx context.Context, sig uint32, all bool) (err error) {
 		return err
 	}
 
-	running, status, err := t.bundle.Disable(ctx)
+	status, running, err := t.bundle.Disable(ctx)
 	if err != nil {
 		logger.WithError(err).Error("[LateInit Kill] disable bundle error")
 		return err
@@ -133,7 +133,9 @@ func (t *LateInit) Kill(ctx context.Context, sig uint32, all bool) (err error) {
 
 	logger.Info("shim process is running, kill process")
 	t.conn.kill(sig, all)
-	return t.unit.Stop(ctx)
+	err = t.unit.Stop(ctx)
+	logger.Info("process has stopped")
+	return err
 }
 
 // Pty resizes the processes pty/console
@@ -195,14 +197,12 @@ func (t *LateInit) Wait(ctx context.Context) (*runtime.Exit, error) {
 		if exited := t.getExited(); exited != nil {
 			return exited, nil
 		}
-		exited, err := t.bundle.Exited(ctx)
+		exited, _, err := t.bundle.Exited(ctx)
 		if err != nil {
 			return nil, err
 		}
 		if exited == nil {
 			exited = &runtime.Exit{
-				Pid:       0,
-				Status:    0,
 				Timestamp: time.Now(),
 			}
 		}
@@ -238,7 +238,13 @@ func (t *LateInit) Delete(ctx context.Context) (exit *runtime.Exit, err error) {
 		if exited := t.getExited(); exited != nil {
 			return exited, nil
 		}
-		return t.bundle.Exited(ctx)
+		exit, _, err := t.bundle.Exited(ctx)
+		if exit == nil {
+			exit = &runtime.Exit{
+				Timestamp: time.Now(),
+			}
+		}
+		return exit, err
 	}
 	if err != nil {
 		return nil, err

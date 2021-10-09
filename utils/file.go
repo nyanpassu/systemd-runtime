@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 
+	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
 )
 
@@ -31,7 +32,7 @@ func EnsureDirExists(path string) error {
 }
 
 func FileReadJSON(file *os.File, dst interface{}) (bool, error) {
-	content, err := FileRead(file)
+	content, err := FileResetRead(file)
 	if err != nil {
 		return false, err
 	}
@@ -44,7 +45,10 @@ func FileReadJSON(file *os.File, dst interface{}) (bool, error) {
 	return true, nil
 }
 
-func FileRead(file *os.File) ([]byte, error) {
+func FileResetRead(file *os.File) (content []byte, err error) {
+	if _, err := file.Seek(0, 0); err != nil {
+		return nil, err
+	}
 	var size int
 	if info, err := file.Stat(); err == nil {
 		size64 := info.Size()
@@ -75,12 +79,18 @@ func FileRead(file *os.File) ([]byte, error) {
 	}
 }
 
-func FileWrite(file *os.File, val []byte) error {
-	logrus.WithField("val", val).Info("FileWrite")
+func FileTruncateWrite(file *os.File, val []byte) error {
+	offset, err := file.Seek(0, 0)
+	if err != nil {
+		return err
+	}
+	if offset != 0 {
+		return errors.New("can not seek start of file")
+	}
 	if err := file.Truncate(0); err != nil {
 		return err
 	}
-	_, err := file.Write(val)
+	_, err = file.Write(val)
 	return err
 }
 
@@ -89,7 +99,7 @@ func FileWriteJSON(file *os.File, val interface{}) error {
 	if err != nil {
 		return err
 	}
-	return FileWrite(file, content)
+	return FileTruncateWrite(file, content)
 }
 
 func FileClose(file *os.File, logger *logrus.Entry) {

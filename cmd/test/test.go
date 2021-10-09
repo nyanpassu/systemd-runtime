@@ -2,62 +2,124 @@ package main
 
 import (
 	"context"
-	"io"
+	"flag"
+	"io/ioutil"
 	"os"
+	"os/signal"
+	"time"
+
+	"github.com/containerd/containerd/runtime"
+	log "github.com/sirupsen/logrus"
+	"golang.org/x/sys/unix"
 
 	"github.com/projecteru2/systemd-runtime/common"
-	"github.com/projecteru2/systemd-runtime/utils"
-	log "github.com/sirupsen/logrus"
 )
 
 func main() {
-	read1()
+	wd, err := os.Getwd()
+	if err != nil {
+		log.Fatalln("getwd error")
+	}
+	var bundlePath string
+	flag.StringVar(&bundlePath, "bundle", wd, "specific bundle path")
+	flag.Parse()
+
+	switch flag.Arg(0) {
+	case "shim":
+		err = shim(context.Background(), bundlePath)
+	case "task-manager":
+		err = taskManager(context.Background(), bundlePath)
+	}
+	if err != nil {
+		log.Fatalln(err)
+	}
 }
 
-func read1() {
-	bundlePath := os.Args[1]
+func waitCTRLD() <-chan struct{} {
+	ch := make(chan struct{})
 
-	statusFile, err := common.OpenShimStatusFile(bundlePath)
-	if err != nil {
-		log.WithError(err).Fatalln("open shim status file error")
-	}
-
-	content, err := io.ReadAll(statusFile)
-	if err != nil {
-		log.WithError(err).Fatalln("read shim status file error")
-	}
-
-	log.Info(content)
-}
-
-func read() {
-
-	bundlePath := os.Args[1]
-
-	statusFile, err := common.OpenShimStatusFile(bundlePath)
-	if err != nil {
-		log.WithError(err).Fatalln("open shim status file error")
-	}
-	shimLockFile, err := common.OpenShimLockFile(bundlePath)
-	if err != nil {
-		log.WithError(err).Fatalln("open shim lock file error")
-	}
-	ctx := context.Background()
-	if err := utils.FileLock(ctx, statusFile); err != nil {
-		log.WithError(err).Fatalln("lock shim status file error")
-	}
-	defer func() {
-		if err := utils.FileUnlock(statusFile); err != nil {
-			log.WithError(err).Error("unlock status file error")
-		}
+	go func() {
+		ioutil.ReadAll(os.Stdin)
+		close(ch)
 	}()
-	status := common.ShimStatus{}
-	if _, err := utils.FileReadJSON(statusFile, &status); err != nil {
-		log.WithError(err).Fatalln("read shim status file error")
-	}
-	canLock, err := utils.FileCanLock(shimLockFile)
+
+	return ch
+}
+
+func shim(ctx context.Context, bundlePath string) error {
+	signals := make(chan os.Signal, 32)
+	smp := []os.Signal{unix.SIGTERM, unix.SIGINT}
+	signal.Notify(signals, smp...)
+
+	mng, err := common.NewStatusManager(bundlePath, log.NewEntry(log.StandardLogger()))
 	if err != nil {
-		log.WithError(err).Fatalln("test shim lock file error")
+		return err
 	}
-	log.Info("can lock %b", canLock)
+	status, err := mng.LockForStartShim(ctx)
+	if err != nil {
+		return err
+	}
+	log.Infof("created = %v, disabled =%v, pid = %v", status.Created, status.Disabled, status.PID)
+
+	pid := os.Getpid()
+	status.Created = true
+	status.PID = pid
+
+	err = mng.UpdateStatus(ctx, status)
+	if err != nil {
+		return err
+	}
+	err = mng.UnlockStatusFile()
+	if err != nil {
+		return err
+	}
+
+	log.Info("wait termination")
+	select {
+	case <-signals:
+	case <-waitCTRLD():
+	}
+
+	ctx = context.Background()
+	status, err = mng.LockForUpdateStatus(ctx)
+	if err != nil {
+		return err
+	}
+	log.Infof("created = %v, disabled =%v, pid = %v", status.Created, status.Disabled, status.PID)
+	status.Exit = &runtime.Exit{
+		Pid:       uint32(pid),
+		Status:    0,
+		Timestamp: time.Now(),
+	}
+	if err = mng.UpdateStatus(ctx, status); err != nil {
+		return err
+	}
+	return mng.ReleaseLocks()
+}
+
+func taskManager(ctx context.Context, bundlePath string) error {
+	action := flag.Arg(1)
+
+	mng, err := common.NewStatusManager(bundlePath, log.NewEntry(log.StandardLogger()))
+	if err != nil {
+		return err
+	}
+	status, running, err := mng.LockForTaskManager(ctx)
+	if err != nil {
+		return err
+	}
+	log.Infof("shimRunning = %v, created = %v, disabled =%v, pid = %v", running, status.Created, status.Disabled, status.PID)
+	if status.Exit != nil {
+		log.Infof("exitAt = %v", status.Exit.Timestamp)
+	}
+
+	switch action {
+	case "disable":
+		status.Disabled = true
+		err = mng.UpdateStatus(ctx, status)
+		if err != nil {
+			return err
+		}
+	}
+	return mng.UnlockStatusFile()
 }

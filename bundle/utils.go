@@ -96,15 +96,26 @@ func NewBundle(
 	if err != nil {
 		return nil, err
 	}
+	statusManager, err := common.NewStatusManager(bundlePath, log.G(ctx))
+	if err != nil {
+		return nil, err
+	}
+	b.statusManager = statusManager
 	return b, err
 }
 
 // LoadAndCheckBundle .
 func LoadBundle(ctx context.Context, state, id, namespace string) (common.Bundle, error) {
+	bundlePath := bundlePath(state, id, namespace)
+	statusManager, err := common.NewStatusManager(bundlePath, log.G(ctx))
+	if err != nil {
+		return nil, err
+	}
 	bundle := &Bundle{
-		id:        id,
-		path:      filepath.Join(state, namespace, id),
-		namespace: namespace,
+		id:            id,
+		path:          bundlePath,
+		namespace:     namespace,
+		statusManager: statusManager,
 	}
 	// fast path
 	bf, err := ioutil.ReadDir(bundle.Path())

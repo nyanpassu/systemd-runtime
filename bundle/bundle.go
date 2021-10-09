@@ -16,7 +16,6 @@ import (
 	"github.com/projecteru2/systemd-runtime/common"
 	"github.com/projecteru2/systemd-runtime/systemd"
 	"github.com/projecteru2/systemd-runtime/task"
-	"github.com/projecteru2/systemd-runtime/utils"
 )
 
 type Bundle struct {
@@ -25,6 +24,7 @@ type Bundle struct {
 	namespace              string
 	containerdAddress      string
 	containerdTTRPCAddress string
+	statusManager          *common.StatusManager
 }
 
 func (b *Bundle) ID() string {
@@ -58,41 +58,36 @@ func (b *Bundle) CheckContainerdConfig(
 	return nil
 }
 
-func (b *Bundle) Disable(ctx context.Context) (running bool, status *common.ShimStatus, err error) {
-	statusFile, err := common.OpenShimStatusFile(b.path)
+func (b *Bundle) Disable(ctx context.Context) (status common.ShimStatus, shimRunning bool, err error) {
+	status, shimRunning, err = b.statusManager.LockForTaskManager(ctx)
 	if err != nil {
-		return false, nil, err
-	}
-	shimLockFile, err := common.OpenShimLockFile(b.path)
-	if err != nil {
-		return false, nil, err
-	}
-	if err := utils.FileLock(ctx, statusFile); err != nil {
-		return false, nil, err
+		return
 	}
 	defer func() {
-		if err := utils.FileUnlock(statusFile); err != nil {
+		if err := b.statusManager.UnlockStatusFile(); err != nil {
 			log.G(ctx).WithError(err).Error("unlock status file error")
 		}
 	}()
-	status = &common.ShimStatus{}
-	if _, err := utils.FileReadJSON(statusFile, status); err != nil {
-		return false, nil, err
-	}
 	if status.Disabled {
-		canLock, err := utils.FileCanLock(shimLockFile)
-		return !canLock, status, err
+		return
 	}
-	status.Disabled = true
-	if err := utils.FileWriteJSON(statusFile, &status); err != nil {
-		return false, nil, err
-	}
-	canLock, err := utils.FileCanLock(shimLockFile)
-	return !canLock, status, err
+	newStatus := status
+	newStatus.Disabled = true
+	return status, shimRunning, b.statusManager.UpdateStatus(ctx, newStatus)
 }
 
-func (b *Bundle) Exited(ctx context.Context) (*runtime.Exit, error) {
-	return common.ReadExited(ctx, b.path)
+func (b *Bundle) Exited(ctx context.Context) (lastExit *runtime.Exit, shimRunning bool, err error) {
+	status, shimRunning, err := b.statusManager.LockForTaskManager(ctx)
+	if err != nil {
+		return nil, false, err
+	}
+	defer func() {
+		if err := b.statusManager.UnlockStatusFile(); err != nil {
+			log.G(ctx).WithError(err).Error("unlock status file error")
+		}
+	}()
+
+	return status.Exit, shimRunning, nil
 }
 
 func (b *Bundle) LoadTask(ctx context.Context, events *exchange.Exchange) (runtime.Task, error) {
@@ -169,29 +164,18 @@ func (b *Bundle) IntoDetail() systemd.Detail {
 	}
 }
 
-func (b *Bundle) Disabled(ctx context.Context) (disabled bool, running bool, err error) {
-	statusFile, err := common.OpenShimStatusFile(b.path)
+func (b *Bundle) Disabled(ctx context.Context) (disabled bool, shimRunning bool, err error) {
+	var status common.ShimStatus
+	status, shimRunning, err = b.statusManager.LockForTaskManager(ctx)
 	if err != nil {
-		return false, false, err
-	}
-	shimLockFile, err := common.OpenShimLockFile(b.path)
-	if err != nil {
-		return false, false, err
-	}
-	if err := utils.FileLock(ctx, statusFile); err != nil {
-		return false, false, err
+		return
 	}
 	defer func() {
-		if err := utils.FileUnlock(statusFile); err != nil {
+		if err := b.statusManager.UnlockStatusFile(); err != nil {
 			log.G(ctx).WithError(err).Error("unlock status file error")
 		}
 	}()
-	status := &common.ShimStatus{}
-	if _, err := utils.FileReadJSON(statusFile, status); err != nil {
-		return false, false, err
-	}
-	canLock, err := utils.FileCanLock(shimLockFile)
-	return status.Disabled, !canLock, err
+	return status.Disabled, shimRunning, nil
 }
 
 func (b *Bundle) recreateSystemdUnit(ctx context.Context) (*systemd.Unit, error) {
