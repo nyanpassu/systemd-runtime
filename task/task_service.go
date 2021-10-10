@@ -69,7 +69,8 @@ func (t *TaskService) State(ctx context.Context) (runtime.State, error) {
 		status = runtime.PausingStatus
 	}
 	return runtime.State{
-		Pid:        response.Pid,
+		Pid: 0,
+		// Pid:        response.Pid,
 		Status:     status,
 		Stdin:      response.Stdin,
 		Stdout:     response.Stdout,

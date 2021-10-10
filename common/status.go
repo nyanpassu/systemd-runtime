@@ -147,6 +147,21 @@ func (mng *StatusManager) LockForUpdateStatus(ctx context.Context) (status ShimS
 	return
 }
 
+func (mng *StatusManager) GetStatus(ctx context.Context) (status ShimStatus, err error) {
+	if err := mng.lockStatusFile(ctx); err != nil {
+		return status, err
+	}
+
+	defer func() {
+		if err := mng.UnlockStatusFile(); err != nil {
+			log.G(ctx).WithError(err).Error("unlock status file error")
+		}
+	}()
+
+	_, err = utils.FileReadJSON(mng.statusFile, &status)
+	return
+}
+
 func (mng *StatusManager) IsShimRunning() (running bool, err error) {
 	mng.mu.Lock()
 	defer mng.mu.Unlock()

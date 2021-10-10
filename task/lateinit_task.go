@@ -255,10 +255,11 @@ func (t *LateInit) Delete(ctx context.Context) (exit *runtime.Exit, err error) {
 // PID of the process
 func (t *LateInit) PID() uint32 {
 	log.G(context.TODO()).WithField("id", t.ID()).Debug("get pid of task")
-	service, _ := t.holder.getService()
-	if service != nil {
-		return service.PID()
-	}
+	// service, _ := t.holder.getService()
+	// if service != nil {
+	// 	return service.PID()
+	// }
+	// always return 0
 	return 0
 }
 

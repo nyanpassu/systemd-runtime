@@ -13,7 +13,7 @@
    See the License for the specific language governing permissions and
    limitations under the License.
 */
-package main
+package shim
 
 import (
 	"context"
@@ -81,7 +81,7 @@ type Config struct {
 type BinaryOpts func(*Config)
 
 // Run initializes and runs a shim server
-func run(opts ...BinaryOpts) {
+func Run(opts ...BinaryOpts) {
 	s := ShimApp{}
 	if err := s.parseEnvAndFlags(); err != nil {
 		fmt.Fprintf(os.Stderr, "%s: %s\n", shimID, err)
@@ -400,6 +400,7 @@ func (s *ShimApp) handleSignals(logger *logrus.Entry, signals chan os.Signal) <-
 	go func() {
 		logger.Info("starting signal loop")
 		count := 0
+		closed := false
 
 		for sig := range signals {
 			switch sig {
@@ -410,13 +411,19 @@ func (s *ShimApp) handleSignals(logger *logrus.Entry, signals chan os.Signal) <-
 			case unix.SIGPIPE:
 			case unix.SIGTERM:
 				logger.Warn("sigal term")
-				close(ch)
+				if !closed {
+					close(ch)
+					closed = true
+				}
 			case unix.SIGINT:
 				count++
 				logger.Warn("sigal int")
 				if count == 3 {
 					logger.Warn("sigal int count > 3, terminating")
-					close(ch)
+					if !closed {
+						close(ch)
+						closed = true
+					}
 				}
 			}
 		}

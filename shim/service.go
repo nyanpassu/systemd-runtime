@@ -95,7 +95,8 @@ func (s *Service) Start(ctx context.Context, r *taskAPI.StartRequest) (*taskAPI.
 
 		sender.SendTaskStart(&eventstypes.TaskStart{
 			ContainerID: container.ID,
-			Pid:         uint32(p.Pid()),
+			Pid:         0,
+			// Pid:         uint32(p.Pid()),
 		})
 	default:
 		sender.SendExecStart(&eventstypes.TaskExecStarted{
@@ -266,12 +267,16 @@ func (s *Service) Kill(ctx context.Context, r *taskAPI.KillRequest) (_ *ptypes.E
 	}
 	defer release()
 
+	log.G(ctx).Infof("kill process, id = %d, execID = %d", r.ID, r.ExecID)
+
 	done, cancel := s.status.Kill()
 	defer func() {
 		if err != nil {
+			log.G(ctx).Infof("cancel kill process, id = %d, execID = %d", r.ID, r.ExecID)
 			cancel()
 			return
 		}
+		log.G(ctx).Infof("done process, id = %d, execID = %d", r.ID, r.ExecID)
 		done()
 	}()
 	if err := container.Kill(ctx, r); err != nil {
@@ -415,6 +420,8 @@ func (s *Service) Shutdown(ctx context.Context, _ *taskAPI.ShutdownRequest) (*pt
 		log.G(ctx).Info("remove socket")
 		_ = RemoveSocket(s.shimAddress)
 	}
+
+	close(s.closed)
 	return empty, nil
 }
 
@@ -546,7 +553,9 @@ func (s *Service) checkProcesses(e goRunc.Exit) {
 
 	livingProcessesCount := 0
 	defer func() {
-		if s.status.HasStarted() && livingProcessesCount == 0 {
+		started := s.status.HasStarted()
+		log.G(ctx).Infof("check processes, started = %b, livingProcessesCount = %d", started, livingProcessesCount)
+		if started && livingProcessesCount == 0 {
 			s.shutdownAsync(context.Background())
 		}
 	}()
@@ -558,13 +567,20 @@ func (s *Service) checkProcesses(e goRunc.Exit) {
 	}
 	defer release()
 
+	if container == nil {
+		log.G(ctx).Warn("container not created")
+		return
+	}
+
 	if !container.HasPid(e.Pid) {
+		log.G(ctx).Debugf("container hasn't pid %v", e.Pid)
 		livingProcessesCount += len(container.All())
 		return
 	}
 
 	for _, p := range container.All() {
 		if p.Pid() != e.Pid {
+			log.G(ctx).Debugf("process is not what we are looking for %v", e.Pid)
 			livingProcessesCount++
 			continue
 		}
@@ -582,6 +598,7 @@ func (s *Service) checkProcesses(e goRunc.Exit) {
 		p.SetExited(e.Status)
 
 		if e.Pid != container.Pid() {
+			log.G(ctx).Info("SendEventExit")
 			s.sender.SendEventExit(&eventstypes.TaskExit{
 				ContainerID: container.ID,
 				ID:          p.ID(),
@@ -591,13 +608,17 @@ func (s *Service) checkProcesses(e goRunc.Exit) {
 			})
 			return
 		}
-		s.sender.SendEventContainerExit(&eventstypes.TaskExit{
+		log.G(ctx).Info("SendEventContainerExit")
+		if err := s.sender.SendEventContainerExit(ctx, &eventstypes.TaskExit{
 			ContainerID: container.ID,
 			ID:          p.ID(),
 			Pid:         0,
 			ExitStatus:  uint32(e.Status),
 			ExitedAt:    p.ExitedAt(),
-		}, &s.status)
+		}); err != nil {
+			log.G(ctx).Error("SendEventContainerExit error")
+		}
+		log.G(ctx).Info("EventContainerExitSent")
 	}
 }
 

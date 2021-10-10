@@ -4,22 +4,26 @@ import (
 	"context"
 	"sync"
 
+	"github.com/sirupsen/logrus"
+
 	eventstypes "github.com/containerd/containerd/api/events"
 	"github.com/containerd/containerd/namespaces"
 	"github.com/containerd/containerd/runtime/v2/runc"
 
-	"github.com/sirupsen/logrus"
+	"github.com/projecteru2/systemd-runtime/common"
 )
 
 type EventSender struct {
 	mu               sync.Mutex
 	events           chan interface{}
 	containerExitEvt interface{}
+	statusManager    *common.StatusManager
 }
 
-func NewEventSender() *EventSender {
+func NewEventSender(statusManager *common.StatusManager) *EventSender {
 	return &EventSender{
-		events: make(chan interface{}, 128),
+		events:        make(chan interface{}, 128),
+		statusManager: statusManager,
 	}
 }
 
@@ -40,16 +44,19 @@ func (s *EventSender) Close() {
 	close(s.events)
 }
 
-func (s *EventSender) SendEventContainerExit(evt *eventstypes.TaskExit, status *SyncedServiceStatus) {
-	// if service is killed by shimservice api, then we send the exit event
-	if status.oneOf(ServiceKilling, ServiceKilled) {
-		s.SendEventExit(evt)
-		return
+func (s *EventSender) SendEventContainerExit(ctx context.Context, evt *eventstypes.TaskExit) error {
+	// if bundle is disabled then we send container exit event
+	status, err := s.statusManager.GetStatus(ctx)
+	if err != nil {
+		return err
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
 
-	s.containerExitEvt = evt
+	if status.Disabled {
+		logrus.Info("DoSendEventContainerExit")
+		s.SendEventExit(evt)
+	}
+
+	return nil
 }
 
 func (s *EventSender) SendEventCreate(evt *eventstypes.TaskCreate) {

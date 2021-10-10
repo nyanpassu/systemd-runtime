@@ -76,6 +76,7 @@ type Service struct {
 	platform stdio.Platform
 	ec       chan goRunc.Exit
 	ep       oom.Watcher
+	closed   chan struct{}
 
 	statusManager   *common.StatusManager
 	status          SyncedServiceStatus
@@ -113,13 +114,14 @@ func NewShimService(ctx context.Context, opts CreateShimOpts) (*Service, error) 
 	}
 	go ep.Run(ctx)
 
-	sender := NewEventSender()
-	sender.SetPublisher(namespace, opts.Publisher)
-
 	statusManager, err := common.NewStatusManager(opts.BundlePath, log.G(ctx))
 	if err != nil {
 		return nil, err
 	}
+
+	sender := NewEventSender(statusManager)
+	sender.SetPublisher(namespace, opts.Publisher)
+
 	s := &Service{
 		id:             opts.ID,
 		bundlePath:     opts.BundlePath,
@@ -130,6 +132,7 @@ func NewShimService(ctx context.Context, opts CreateShimOpts) (*Service, error) 
 
 		ec:            reaper.Default.Subscribe(),
 		ep:            ep,
+		closed:        make(chan struct{}),
 		status:        SyncedServiceStatus{},
 		sender:        sender,
 		statusManager: statusManager,
@@ -253,7 +256,14 @@ func (s *Service) Serve(ctx context.Context) (err error) {
 		}
 	}
 
-	_, err = s.Shutdown(context.Background(), &shimapi.ShutdownRequest{})
+	_, err = s.Kill(context.Background(), &shimapi.KillRequest{
+		Signal: uint32(unix.SIGTERM),
+	})
+	if err != nil {
+		log.G(ctx).WithError(err).Error("kill container error")
+	}
+	<-s.closed
+
 	return err
 }
 

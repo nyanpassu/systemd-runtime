@@ -15,8 +15,12 @@
 */
 package main
 
+import (
+	"github.com/projecteru2/systemd-runtime/cmd/eru-systemd-shim/shim"
+)
+
 func main() {
-	run(func(conf *Config) {
+	shim.Run(func(conf *shim.Config) {
 		conf.NoSetupLogger = true
 	})
 }
