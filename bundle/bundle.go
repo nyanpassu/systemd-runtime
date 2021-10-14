@@ -91,11 +91,11 @@ func (b *Bundle) Exited(ctx context.Context) (lastExit *runtime.Exit, shimRunnin
 }
 
 func (b *Bundle) LoadTask(ctx context.Context, events *exchange.Exchange) (runtime.Task, error) {
-	disabled, running, err := b.Disabled(ctx)
+	status, running, err := b.ShimStatus(ctx)
 	if err != nil {
 		return nil, err
 	}
-	if disabled && !running {
+	if status.Disabled && !running {
 		return nil, common.ErrBundleDisabled
 	}
 
@@ -164,8 +164,7 @@ func (b *Bundle) IntoDetail() systemd.Detail {
 	}
 }
 
-func (b *Bundle) Disabled(ctx context.Context) (disabled bool, shimRunning bool, err error) {
-	var status common.ShimStatus
+func (b *Bundle) ShimStatus(ctx context.Context) (status common.ShimStatus, shimRunning bool, err error) {
 	status, shimRunning, err = b.statusManager.LockForTaskManager(ctx)
 	if err != nil {
 		return
@@ -175,7 +174,20 @@ func (b *Bundle) Disabled(ctx context.Context) (disabled bool, shimRunning bool,
 			log.G(ctx).WithError(err).Error("unlock status file error")
 		}
 	}()
-	return status.Disabled, shimRunning, nil
+	return status, shimRunning, nil
+}
+
+func (b *Bundle) Status(ctx context.Context) (status common.ShimStatus, err error) {
+	status, err = b.statusManager.GetStatus(ctx)
+	if err != nil {
+		return
+	}
+	defer func() {
+		if err := b.statusManager.UnlockStatusFile(); err != nil {
+			log.G(ctx).WithError(err).Error("unlock status file error")
+		}
+	}()
+	return status, nil
 }
 
 func (b *Bundle) recreateSystemdUnit(ctx context.Context) (*systemd.Unit, error) {
