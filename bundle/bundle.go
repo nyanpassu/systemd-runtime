@@ -6,7 +6,6 @@ import (
 
 	"github.com/containerd/containerd/log"
 
-	// "github.com/containerd/containerd/namespaces"
 	"github.com/containerd/containerd/events/exchange"
 	"github.com/containerd/containerd/runtime"
 

@@ -27,6 +27,7 @@ import (
 	"os/signal"
 	"runtime"
 	"runtime/debug"
+	"sync"
 	"syscall"
 	"time"
 
@@ -161,10 +162,6 @@ func (s *ShimApp) printVersion() bool {
 }
 
 func (s *ShimApp) run() error {
-	signals, err := s.setupSignals()
-	if err != nil {
-		return err
-	}
 	if !s.config.NoSubreaper {
 		if err := s.subreaper(); err != nil {
 			return err
@@ -186,30 +183,25 @@ func (s *ShimApp) run() error {
 	})
 	// for now we don't have a shim create timeout
 
-	chShutdown := s.handleSignals(logger, signals)
+	signals, err := s.setupSignals()
+	if err != nil {
+		return err
+	}
+	subscribe := s.handleSignals(logger, signals)
 
 	switch s.action {
 	case "delete":
-		return s.deleteCommand(s.makeContext(chShutdown, logger, 0), publisher)
+		return s.deleteCommand(subscribe.MakeContext(0), publisher)
 	case "start":
-		if err := s.initSocket(s.makeContext(chShutdown, logger, 0)); err != nil {
+		if err := s.initSocket(subscribe.MakeContext(0)); err != nil {
 			return err
 		}
-		return s.startService(chShutdown, logger, publisher)
+		return s.startService(subscribe, logger, publisher)
 	case "fork-start":
-		return s.startNewProcessCommand(s.makeContext(chShutdown, logger, 0))
+		return s.startNewProcessCommand(subscribe.MakeContext(0))
 	default:
-		return s.startService(chShutdown, logger, publisher)
+		return s.startService(subscribe, logger, publisher)
 	}
-}
-
-func (s *ShimApp) makeContext(chShutdown <-chan struct{}, logger *logrus.Entry, timeout time.Duration) context.Context {
-	ctx, cancel := context.WithCancel(namespaces.WithNamespace(log.WithLogger(context.Background(), logger), s.namespace))
-	go func() {
-		<-chShutdown
-		cancel()
-	}()
-	return ctx
 }
 
 // clean up the whole bundle working directory by command, this will not require a running shim process
@@ -367,11 +359,12 @@ func (s *ShimApp) startNewProcess(ctx context.Context) (_ string, retErr error) 
 	return address, nil
 }
 
-func (s *ShimApp) startService(chShutdown <-chan struct{}, logger *logrus.Entry, publisher *shim.RemoteEventsPublisher) error {
-	ctx := s.makeContext(chShutdown, logger, 0)
+func (s *ShimApp) startService(subscribe TermSignalSubscribe, logger *logrus.Entry, publisher *shim.RemoteEventsPublisher) error {
+	ctx := subscribe.MakeContext(0)
 	service, err := shim.NewShimService(ctx, shim.CreateShimOpts{
 		ID:             s.id,
 		BundlePath:     s.bundlePath,
+		Logger:         logger,
 		Publisher:      publisher,
 		Debug:          s.debug,
 		NoSetupLogger:  s.config.NoSetupLogger,
@@ -381,12 +374,11 @@ func (s *ShimApp) startService(chShutdown <-chan struct{}, logger *logrus.Entry,
 	if err != nil {
 		return err
 	}
-	if err = service.InitContainer(ctx); err != nil {
+	if err = service.Serve(ctx, subscribe.Subscribe()); err != nil {
 		return err
 	}
-	if err = service.Serve(ctx); err != nil {
-		return err
-	}
+	<-service.Done()
+
 	select {
 	case <-publisher.Done():
 		return nil
@@ -395,12 +387,15 @@ func (s *ShimApp) startService(chShutdown <-chan struct{}, logger *logrus.Entry,
 	}
 }
 
-func (s *ShimApp) handleSignals(logger *logrus.Entry, signals chan os.Signal) <-chan struct{} {
-	ch := make(chan struct{})
+func (s *ShimApp) handleSignals(logger *logrus.Entry, signals chan os.Signal) TermSignalSubscribe {
+	publisher := &SignalPublisher{
+		logger:    logger,
+		namespace: s.namespace,
+	}
+
 	go func() {
 		logger.Info("starting signal loop")
 		count := 0
-		closed := false
 
 		for sig := range signals {
 			switch sig {
@@ -411,24 +406,18 @@ func (s *ShimApp) handleSignals(logger *logrus.Entry, signals chan os.Signal) <-
 			case unix.SIGPIPE:
 			case unix.SIGTERM:
 				logger.Warn("sigal term")
-				if !closed {
-					close(ch)
-					closed = true
-				}
+				publisher.Publish(uint32(unix.SIGTERM))
 			case unix.SIGINT:
 				count++
 				logger.Warn("sigal int")
 				if count == 3 {
 					logger.Warn("sigal int count > 3, terminating")
-					if !closed {
-						close(ch)
-						closed = true
-					}
+					publisher.Publish(uint32(unix.SIGTERM))
 				}
 			}
 		}
 	}()
-	return ch
+	return publisher
 }
 
 func (s *ShimApp) newCommand(ctx context.Context) (*exec.Cmd, error) {
@@ -564,4 +553,84 @@ func setRuntime() {
 		// the number of Go stacks present in the shim.
 		runtime.GOMAXPROCS(2)
 	}
+}
+
+type TermSignalSubscribe interface {
+	Subscribe() <-chan uint32
+	MakeContext(time.Duration) context.Context
+}
+
+type SignalPublisher struct {
+	sync.Mutex
+	signal      uint32
+	signalSet   bool
+	subscribers []chan<- uint32
+
+	logger    *logrus.Entry
+	namespace string
+}
+
+func (publisher *SignalPublisher) Publish(signal uint32) {
+	subscribers := func() []chan<- uint32 {
+		publisher.Lock()
+		defer publisher.Unlock()
+
+		if publisher.signalSet {
+			return nil
+		}
+
+		publisher.signal = signal
+		publisher.signalSet = true
+		r := publisher.subscribers
+		publisher.subscribers = nil
+
+		return r
+	}()
+
+	for _, sub := range subscribers {
+		sub <- signal
+		close(sub)
+	}
+}
+
+func (publisher *SignalPublisher) Subscribe() <-chan uint32 {
+	ch := make(chan uint32, 1)
+
+	publisher.Lock()
+	defer publisher.Unlock()
+
+	if publisher.signalSet {
+		ch <- publisher.signal
+		close(ch)
+		return ch
+	}
+
+	publisher.subscribers = append(publisher.subscribers, ch)
+	return ch
+}
+
+func (publisher *SignalPublisher) MakeContext(timeout time.Duration) context.Context {
+	ctx, cancel := context.WithCancel(
+		namespaces.WithNamespace(
+			log.WithLogger(
+				context.Background(),
+				publisher.logger,
+			),
+			publisher.namespace,
+		),
+	)
+	go func() {
+		if timeout == 0 {
+			<-publisher.Subscribe()
+			cancel()
+			return
+		}
+
+		select {
+		case <-publisher.Subscribe():
+		case <-time.After(timeout):
+		}
+		cancel()
+	}()
+	return ctx
 }

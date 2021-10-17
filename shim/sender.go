@@ -8,9 +8,9 @@ import (
 
 	eventstypes "github.com/containerd/containerd/api/events"
 	"github.com/containerd/containerd/namespaces"
-	"github.com/containerd/containerd/runtime/v2/runc"
 
 	"github.com/projecteru2/systemd-runtime/common"
+	"github.com/projecteru2/systemd-runtime/runc"
 )
 
 type EventSender struct {
@@ -42,21 +42,6 @@ func (s *EventSender) SetPublisher(namespace string, publisher Publisher) {
 
 func (s *EventSender) Close() {
 	close(s.events)
-}
-
-func (s *EventSender) SendEventContainerExit(ctx context.Context, evt *eventstypes.TaskExit) error {
-	// if bundle is disabled then we send container exit event
-	status, err := s.statusManager.GetStatus(ctx)
-	if err != nil {
-		return err
-	}
-
-	if status.Disabled {
-		logrus.Info("DoSendEventContainerExit")
-		s.SendEventExit(evt)
-	}
-
-	return nil
 }
 
 func (s *EventSender) SendEventCreate(evt *eventstypes.TaskCreate) {

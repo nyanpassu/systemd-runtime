@@ -4,9 +4,8 @@ import (
 	"sync"
 
 	"github.com/pkg/errors"
-	"github.com/sirupsen/logrus"
 
-	"github.com/containerd/containerd/runtime/v2/runc"
+	"github.com/projecteru2/systemd-runtime/runc"
 )
 
 var (
@@ -19,10 +18,6 @@ type ContainerHolder struct {
 	mu        sync.RWMutex
 	container *runc.Container
 	deleted   bool
-}
-
-type GetContainerOption struct {
-	ID string
 }
 
 func (h *ContainerHolder) NewContainer(supplier func() (*runc.Container, error)) (int, error) {
@@ -44,15 +39,16 @@ func (h *ContainerHolder) IsDeleted() bool {
 	return h.deleted
 }
 
-func (h *ContainerHolder) GetLockedContainer(opt GetContainerOption) (_ *runc.Container, _ func(), err error) {
+func (h *ContainerHolder) GetLockedContainer() (_ *runc.Container, _ func(), err error) {
 	locker := h.mu.RLocker()
 	locker.Lock()
 
-	if opt.ID != "" {
-		if err := h.checkContainer(opt.ID); err != nil {
-			locker.Unlock()
-			return nil, nil, err
+	if h.container == nil {
+		defer locker.Unlock()
+		if h.deleted {
+			return nil, nil, ErrContainerDeleted
 		}
+		return nil, nil, ErrContainerNotCreated
 	}
 
 	return h.container, func() {
@@ -60,7 +56,7 @@ func (h *ContainerHolder) GetLockedContainer(opt GetContainerOption) (_ *runc.Co
 	}, nil
 }
 
-func (h *ContainerHolder) GetLockedContainerForDelete(opt GetContainerOption) (*runc.Container, func(), func(), error) {
+func (h *ContainerHolder) GetLockedContainerForDelete() (*runc.Container, func(), func(), error) {
 	h.mu.Lock()
 
 	if h.container == nil {
@@ -71,13 +67,6 @@ func (h *ContainerHolder) GetLockedContainerForDelete(opt GetContainerOption) (*
 		return nil, nil, nil, ErrContainerNotCreated
 	}
 
-	if opt.ID != "" {
-		if err := h.checkContainer(opt.ID); err != nil {
-			h.mu.Unlock()
-			return nil, nil, nil, err
-		}
-	}
-
 	return h.container, func() {
 			defer h.mu.Unlock()
 
@@ -86,20 +75,4 @@ func (h *ContainerHolder) GetLockedContainerForDelete(opt GetContainerOption) (*
 		}, func() {
 			defer h.mu.Unlock()
 		}, nil
-}
-
-func (h *ContainerHolder) checkContainer(id string) error {
-	if h.deleted {
-		return ErrContainerDeleted
-	}
-
-	if h.container == nil {
-		return ErrContainerNotCreated
-	}
-
-	if id != "" && h.container.ID != id {
-		logrus.WithField("id", id).Error("incorrect container id")
-		return ErrIncorrectContainerID
-	}
-	return nil
 }
