@@ -29,6 +29,7 @@ import (
 	"github.com/containerd/containerd/api/types/task"
 	"github.com/containerd/containerd/errdefs"
 	"github.com/containerd/containerd/pkg/process"
+	"github.com/containerd/containerd/runtime"
 	"github.com/containerd/containerd/runtime/v2/runc/options"
 	"github.com/containerd/typeurl"
 	ptypes "github.com/gogo/protobuf/types"
@@ -91,6 +92,11 @@ func (s *Service) Delete(ctx context.Context, execID string) (exitStatus uint32,
 	}
 
 	container, release, cancel, err := s.containerHolder.GetLockedContainerForDelete()
+	if err == ErrContainerDeleted {
+		defer s.close()
+		exitStatus := s.exitStatus.Load().(runtime.Exit)
+		return exitStatus.Status, exitStatus.Timestamp, exitStatus.Pid, nil
+	}
 	if err != nil {
 		return exitStatus, exitAt, pid, err
 	}
@@ -143,6 +149,16 @@ func (s *Service) ResizePty(ctx context.Context, execID string, width uint16, he
 // State returns runtime state information for a process
 func (s *Service) State(ctx context.Context, execID string) (*Status, error) {
 	container, release, err := s.containerHolder.GetLockedContainer()
+	if err == ErrContainerDeleted && execID == "" {
+		exitStatus := s.exitStatus.Load().(runtime.Exit)
+		return &Status{
+			ID:         s.id,
+			Bundle:     s.bundlePath,
+			Status:     task.StatusStopped,
+			ExitStatus: exitStatus.Status,
+			ExitedAt:   exitStatus.Timestamp,
+		}, nil
+	}
 	if err != nil {
 		s.logger.WithError(err).Error("getContainer error")
 		return nil, errdefs.ToGRPC(err)

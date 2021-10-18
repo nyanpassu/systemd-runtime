@@ -42,8 +42,28 @@ func (t *TaskService) ID() string {
 }
 
 // State returns the process state
-func (t *TaskService) State(ctx context.Context) (runtime.State, error) {
+func (t *TaskService) State(ctx context.Context) (state runtime.State, err error) {
 	log.G(ctx).WithField("id", t.ID()).Debug("call TaskService::State")
+	defer func() {
+		var status string
+		switch state.Status {
+		case runtime.CreatedStatus:
+			status = "created"
+		case runtime.RunningStatus:
+			status = "running"
+		case runtime.StoppedStatus:
+			status = "stopped"
+		case runtime.PausedStatus:
+			status = "paused"
+		case runtime.PausingStatus:
+			status = "pausing"
+		default:
+			status = "unknown"
+		}
+		if err == nil {
+			log.G(ctx).WithField("id", t.ID()).Debugf("[TaskService State] state = %v", status)
+		}
+	}()
 
 	response, err := t.taskService.State(ctx, &taskv2.StateRequest{
 		ID: t.ID(),
@@ -133,7 +153,7 @@ func (t *TaskService) Start(ctx context.Context) error {
 }
 
 // Wait for the process to exit
-func (t *TaskService) Wait(ctx context.Context) (*runtime.Exit, error) {
+func (t *TaskService) Wait(ctx context.Context) (exit *runtime.Exit, err error) {
 	log.G(ctx).WithField("id", t.ID()).Debug("call TaskService::Wait")
 
 	response, err := t.taskService.Wait(ctx, &taskv2.WaitRequest{

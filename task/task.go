@@ -87,14 +87,9 @@ func (t *Task) State(ctx context.Context) (state runtime.State, err error) {
 
 // Kill will shutdown a container forever
 func (t *Task) Kill(ctx context.Context, sig uint32, all bool) (err error) {
-	logger := t.logger.WithField(
-		"signal", sig,
-	).WithField(
-		"all", all,
-	)
-	logger.Debug(
-		"kill volatile task",
-	)
+	logger := t.logger.WithField("signal", sig).WithField("all", all)
+	logger.Debugf("kill task, signal = %v, all = %v", sig, all)
+	defer func() { logger.Debugf("kill task completed, has error = %v", err != nil) }()
 
 	if err = t.unit.DisableIfPresent(ctx); err != nil {
 		return err
@@ -112,6 +107,7 @@ func (t *Task) Kill(ctx context.Context, sig uint32, all bool) (err error) {
 	}
 	t.connMng.exit(nil)
 
+	logger.Debug("wait service")
 	service, exit, err := t.connMng.waitService(ctx)
 	if err != nil {
 		return err

@@ -30,7 +30,6 @@ import (
 	"time"
 
 	"github.com/containerd/containerd/events"
-	"github.com/containerd/containerd/log"
 
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
@@ -95,6 +94,7 @@ type Service struct {
 	shimStarted      uint32
 	shimDisabled     uint32
 	shimFirstStarted uint32
+	exitStatus       atomic.Value
 
 	shimAddress string
 }
@@ -229,7 +229,9 @@ func (s *Service) Done() <-chan struct{} {
 }
 
 func (s *Service) Serve(ctx context.Context, sigChan <-chan uint32) (err error) {
+	s.logger.Debug("[Service Serve]")
 	if err := s.init(ctx); err != nil {
+		s.logger.WithError(err).Error("[Service Serve] init failed")
 		return err
 	}
 
@@ -291,6 +293,7 @@ func (s *Service) init(ctx context.Context) (err error) {
 
 	evt, err := s.createContainer(ctx, opts)
 	if err != nil {
+		s.logger.WithError(err).Error("[Service init] create container failed")
 		return err
 	}
 
@@ -309,6 +312,7 @@ func (s *Service) init(ctx context.Context) (err error) {
 	}
 
 	if _, err = s.start(ctx); err != nil {
+		s.logger.WithError(err).Error("start failed")
 		return err
 	}
 	return nil
@@ -322,7 +326,7 @@ func (s *Service) serveTaskService(logger *logrus.Entry) (func(context.Context) 
 	}
 
 	logger.Debug("registering ttrpc server")
-	shimapi.RegisterTaskService(server, &ShimTaskService{service: s})
+	shimapi.RegisterTaskService(server, &ShimTaskService{service: s, logger: logger})
 
 	if err := s.serveTTRPC(logger, server); err != nil {
 		logger.Error("serve error")
@@ -346,7 +350,7 @@ func (s *Service) setupDumpStacks(logger *logrus.Entry) {
 
 func (s *Service) setLogger(ctx context.Context) error {
 	logrus.SetFormatter(&logrus.TextFormatter{
-		TimestampFormat: log.RFC3339NanoFixed,
+		TimestampFormat: clog.RFC3339NanoFixed,
 		FullTimestamp:   true,
 	})
 	if s.debug {
@@ -457,10 +461,16 @@ func (s *Service) processExits() {
 }
 
 func (s *Service) checkProcesses(ctx context.Context, e goRunc.Exit) {
+	s.logger.Info("[Service checkProcesses]")
 	livingProcessesCount := 0
 	container, release, err := s.containerHolder.GetLockedContainer()
 	if err != nil {
-		s.logger.WithError(err).Error("")
+		if err == ErrContainerNotCreated {
+			s.logger.Debug("check processes when container is not created")
+		}
+		if err == ErrContainerDeleted {
+			s.logger.Warn("check processes when container is deleted")
+		}
 		return
 	}
 	defer release()
@@ -589,6 +599,8 @@ func (s *Service) close() {
 }
 
 func (s *Service) writeExitStatus(ctx context.Context, exit *cruntime.Exit) error {
+	s.exitStatus.Store(*exit)
+
 	status, err := s.statusManager.LockForUpdateStatus(ctx)
 	if err != nil {
 		return err

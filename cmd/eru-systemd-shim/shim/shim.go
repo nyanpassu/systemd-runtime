@@ -167,6 +167,11 @@ func (s *ShimApp) run() error {
 			return err
 		}
 	}
+	if s.debug {
+		logrus.SetLevel(logrus.DebugLevel)
+	} else {
+		logrus.SetLevel(logrus.InfoLevel)
+	}
 
 	publisher, err := shim.NewPublisher(s.containerdTTRPCAddress)
 	if err != nil {

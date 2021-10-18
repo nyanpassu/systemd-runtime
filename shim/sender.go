@@ -14,10 +14,9 @@ import (
 )
 
 type EventSender struct {
-	mu               sync.Mutex
-	events           chan interface{}
-	containerExitEvt interface{}
-	statusManager    *common.StatusManager
+	mu            sync.Mutex
+	events        chan interface{}
+	statusManager *common.StatusManager
 }
 
 func NewEventSender(statusManager *common.StatusManager) *EventSender {

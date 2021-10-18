@@ -110,6 +110,11 @@ func (s *ConnMng) subscribe() <-chan *TaskService {
 	s.Lock()
 	defer s.Unlock()
 
+	if s.service != nil {
+		ch <- s.service
+		return ch
+	}
+
 	s.subscribers = append(s.subscribers, ch)
 	return ch
 }
