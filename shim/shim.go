@@ -155,6 +155,7 @@ func NewShimService(ctx context.Context, opts CreateShimOpts) (s *Service, err e
 	}()
 	s = &Service{
 		id:             opts.ID,
+		namespace:      namespace,
 		bundlePath:     opts.BundlePath,
 		debug:          opts.Debug,
 		noSetupLogger:  opts.NoSetupLogger,

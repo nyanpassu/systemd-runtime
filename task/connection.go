@@ -116,23 +116,6 @@ func (s *ConnMng) Disabled(exit *runtime.Exit) {
 	}
 }
 
-// func (s *ConnMng) exit(exit *runtime.Exit) {
-// 	subscribers := func() []chan<- *TaskService {
-// 		s.Lock()
-// 		defer s.Unlock()
-
-// 		s.exitStatus = exit
-// 		subscribers := s.subscribers
-// 		s.subscribers = nil
-
-// 		return subscribers
-// 	}()
-
-// 	for _, sub := range subscribers {
-// 		close(sub)
-// 	}
-// }
-
 func (s *ConnMng) subscribe() <-chan TaskServiceSubscribe {
 	ch := make(chan TaskServiceSubscribe, 1)
 	s.Lock()

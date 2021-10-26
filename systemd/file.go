@@ -45,7 +45,7 @@ func (detail Detail) service() string {
 		envs = append(envs, fmt.Sprintf("Environment=\"%s\"", env))
 	}
 	return fmt.Sprintf(
-		"[Service]\nType=%s\nWorkingDirectory=%s\n%s\nExecStart=%s",
+		"[Service]\nType=%s\nRestart=always\nWorkingDirectory=%s\n%s\nExecStart=%s",
 		detail.Service.Type,
 		detail.Service.WorkingDirectory,
 		strings.Join(envs, "\n"),
