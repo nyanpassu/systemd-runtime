@@ -28,12 +28,9 @@ import (
 	"syscall"
 	"time"
 
-	"golang.org/x/sys/unix"
-
 	"github.com/containerd/containerd/namespaces"
 	"github.com/containerd/containerd/pkg/dialer"
 	"github.com/containerd/containerd/sys"
-	goRunc "github.com/containerd/go-runc"
 	"github.com/pkg/errors"
 )
 
@@ -43,11 +40,6 @@ const (
 	shimBinaryFormat = "containerd-shim-%s-%s"
 	socketPathLimit  = 106
 )
-
-// Connect to the provided address
-func Connect(address string, d func(string, time.Duration) (net.Conn, error)) (net.Conn, error) {
-	return d(address, 100*time.Second)
-}
 
 // WriteAddress writes a address file atomically
 func WriteAddress(path, address string) error {
@@ -207,16 +199,4 @@ func CanConnect(address string) bool {
 	}
 	conn.Close()
 	return true
-}
-
-func newRunc(root, path, namespace, runtime, criu string, systemd bool) *goRunc.Runc {
-	return &goRunc.Runc{
-		Command:       runtime,
-		Log:           filepath.Join(path, "log.json"),
-		LogFormat:     goRunc.JSON,
-		PdeathSignal:  unix.SIGKILL,
-		Root:          filepath.Join(root, namespace),
-		Criu:          criu,
-		SystemdCgroup: systemd,
-	}
 }

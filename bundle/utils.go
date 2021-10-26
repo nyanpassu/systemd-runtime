@@ -2,17 +2,21 @@ package bundle
 
 import (
 	"context"
-	"fmt"
+	"encoding/json"
 	"io/ioutil"
 	"os"
+	"os/exec"
 	"path/filepath"
-
-	"github.com/containerd/containerd/identifiers"
-	"github.com/containerd/containerd/log"
-	"github.com/containerd/containerd/mount"
-	"github.com/containerd/containerd/runtime"
+	"strings"
 
 	"github.com/pkg/errors"
+
+	"github.com/containerd/containerd/events/exchange"
+	"github.com/containerd/containerd/identifiers"
+	"github.com/containerd/containerd/log"
+	"github.com/containerd/containerd/runtime"
+
+	specsGo "github.com/opencontainers/runtime-spec/specs-go"
 
 	"github.com/projecteru2/systemd-runtime/common"
 )
@@ -23,6 +27,7 @@ const ConfigFilename = "config.json"
 func NewBundle(
 	ctx context.Context,
 	root, state, id, ns, containerdAddress, containerdTTRPCAddress string,
+	exchange *exchange.Exchange,
 	opts runtime.CreateOpts,
 ) (_ common.Bundle, err error) {
 	if err := identifiers.Validate(id); err != nil {
@@ -36,6 +41,7 @@ func NewBundle(
 		namespace:              ns,
 		containerdAddress:      containerdAddress,
 		containerdTTRPCAddress: containerdTTRPCAddress,
+		exchange:               exchange,
 	}
 	unit, err := b.CreateSystemdUnit(ctx, opts)
 	if err != nil {
@@ -89,8 +95,15 @@ func NewBundle(
 	if err := os.Symlink(work, filepath.Join(b.path, "work")); err != nil {
 		return nil, err
 	}
-	// write the spec to the bundle
-	err = ioutil.WriteFile(filepath.Join(b.path, ConfigFilename), opts.Spec.Value, 0666)
+	// we will remote hooks and copy overlay fs to new folder
+	spec, err := processSpec(b.path, opts.Spec.Value)
+	if err != nil {
+		return nil, err
+	}
+	err = ioutil.WriteFile(filepath.Join(b.path, ConfigFilename), spec, 0666)
+	if err != nil {
+		return nil, err
+	}
 
 	err = common.SaveOpts(ctx, bundlePath, opts)
 	if err != nil {
@@ -131,49 +144,50 @@ func LoadBundle(ctx context.Context, state, id, namespace string) (common.Bundle
 
 // Delete a bundle atomically
 func DeleteBundle(state, id, namespace string) error {
-	return deletePath(filepath.Join(state, namespace, id))
-}
-
-// atomicDelete renames the path to a hidden file before removal
-func atomicDelete(path string) error {
-	// create a hidden dir for an atomic removal
-	atomicPath := filepath.Join(filepath.Dir(path), fmt.Sprintf(".%s", filepath.Base(path)))
-	if err := os.Rename(path, atomicPath); err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
-		return err
-	}
-	return os.RemoveAll(atomicPath)
+	return common.DeleteBundlePath(filepath.Join(state, namespace, id))
 }
 
 func bundlePath(state, id, ns string) string {
 	return filepath.Join(state, ns, id)
 }
 
-func deletePath(bundlePath string) error {
-	work, werr := os.Readlink(filepath.Join(bundlePath, "work"))
-	rootfs := filepath.Join(bundlePath, "rootfs")
-	if err := mount.UnmountAll(rootfs, 0); err != nil {
-		return errors.Wrapf(err, "unmount rootfs %s", rootfs)
+func processSpec(bundle string, content []byte) ([]byte, error) {
+	spec := &specsGo.Spec{}
+	if err := json.Unmarshal(content, spec); err != nil {
+		return nil, err
 	}
-	if err := os.Remove(rootfs); err != nil && !os.IsNotExist(err) {
-		return errors.Wrap(err, "failed to remove bundle rootfs")
+	// can't support apparmor yet
+	// systemd unit will start early then apparmor ready
+	spec.Process.ApparmorProfile = ""
+	if err := processRootfs(bundle, spec); err != nil {
+		return nil, err
 	}
-	err := atomicDelete(bundlePath)
-	if err == nil {
-		if werr == nil {
-			return atomicDelete(work)
-		}
+	spec.Hooks = nil
+
+	content, err := json.Marshal(spec)
+	if err != nil {
+		return nil, err
+	}
+
+	return content, nil
+}
+
+func processRootfs(bundle string, spec *specsGo.Spec) error {
+	rootfs := spec.Root.Path
+	if rootfs == "" || strings.HasPrefix(rootfs, bundle) {
 		return nil
 	}
-	// error removing the bundle path; still attempt removing work dir
-	var err2 error
-	if werr == nil {
-		err2 = atomicDelete(work)
-		if err2 == nil {
-			return err
-		}
+
+	newRoot := filepath.Join(bundle, "merged")
+	if err := copyRoot(spec.Root.Path, newRoot); err != nil {
+		return err
 	}
-	return errors.Wrapf(err, "failed to remove both bundle and workdir locations: %v", err2)
+
+	spec.Root.Path = newRoot
+	return nil
+}
+
+func copyRoot(src string, dst string) error {
+	cmd := exec.Command("cp", "-r", "-p", src, dst)
+	return cmd.Run()
 }

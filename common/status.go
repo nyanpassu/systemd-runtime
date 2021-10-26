@@ -109,6 +109,33 @@ func (mng *StatusManager) UpdateStatus(ctx context.Context, status ShimStatus) (
 	return utils.FileWriteJSON(mng.statusFile, &status)
 }
 
+func (mng *StatusManager) LockForCleanup(ctx context.Context) (status ShimStatus, locked bool, err error) {
+	if err := mng.lockStatusFile(ctx); err != nil {
+		return status, locked, err
+	}
+
+	defer func() {
+		if err != nil || !locked {
+			if err := mng.UnlockStatusFile(); err != nil {
+				log.G(ctx).WithError(err).Error("unlock status file error")
+			}
+		}
+	}()
+
+	if _, err := utils.FileReadJSON(mng.statusFile, &status); err != nil {
+		return status, locked, err
+	}
+
+	succ, err := mng.lockRunningFile()
+	if err != nil {
+		return status, locked, err
+	}
+	if !succ {
+		return status, false, err
+	}
+	return status, true, nil
+}
+
 func (mng *StatusManager) LockForTaskManager(ctx context.Context) (status ShimStatus, shimRunning bool, err error) {
 	if err := mng.lockStatusFile(ctx); err != nil {
 		return status, shimRunning, err

@@ -73,7 +73,7 @@ func (m *taskManager) Create(ctx context.Context, id string, opts runtime.Create
 		return nil, err
 	}
 
-	b, err := bundle.NewBundle(ctx, m.root, m.state, id, ns, m.containerdAddress, m.containerdTTRPCAddress, opts)
+	b, err := bundle.NewBundle(ctx, m.root, m.state, id, ns, m.containerdAddress, m.containerdTTRPCAddress, m.events, opts)
 	if err != nil {
 		return nil, err
 	}

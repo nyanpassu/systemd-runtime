@@ -22,7 +22,6 @@ import (
 	"net"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"runtime"
 	"strings"
 	"sync/atomic"
@@ -41,7 +40,6 @@ import (
 	"github.com/containerd/containerd/api/types"
 	"github.com/containerd/containerd/api/types/task"
 	clog "github.com/containerd/containerd/log"
-	"github.com/containerd/containerd/mount"
 	ns "github.com/containerd/containerd/namespaces"
 	"github.com/containerd/containerd/pkg/oom"
 	oomv1 "github.com/containerd/containerd/pkg/oom/v1"
@@ -183,45 +181,8 @@ func NewShimService(ctx context.Context, opts CreateShimOpts) (s *Service, err e
 	return s, nil
 }
 
-func (s *Service) Cleanup(ctx context.Context) (*shimapi.DeleteResponse, error) {
-	s.logger.WithField("id", s.id).Info("Begin Cleanup")
-	cwd, err := os.Getwd()
-	if err != nil {
-		return nil, err
-	}
-	path := filepath.Join(filepath.Dir(cwd), s.id)
-
-	runtime := "/usr/bin/runc"
-
-	logrus.WithField("id", s.id).Info("ReadOptions")
-	opts, err := runc.ReadOptions(path)
-	if err != nil {
-		return nil, err
-	}
-	root := process.RuncRoot
-	if opts != nil && opts.Root != "" {
-		root = opts.Root
-	}
-
-	logrus.WithField("runtime", runtime).WithField("ns", s.namespace).WithField("root", root).WithField("path", path).Info("NewRunc")
-	r := newRunc(root, path, s.namespace, runtime, "", false)
-
-	logrus.WithField("id", s.id).Info("Runc Delete")
-	if err := r.Delete(ctx, s.id, &goRunc.DeleteOpts{
-		Force: true,
-	}); err != nil {
-		logrus.WithError(err).Warn("failed to remove runc container")
-	}
-	logrus.Info("UnmountAll")
-	if err := mount.UnmountAll(filepath.Join(path, "rootfs"), 0); err != nil {
-		logrus.WithError(err).Warn("failed to cleanup rootfs mount")
-	}
-	logrus.Info("Cleanup complete")
-
-	return &shimapi.DeleteResponse{
-		ExitedAt:   time.Now(),
-		ExitStatus: 128 + uint32(unix.SIGKILL),
-	}, nil
+func (s *Service) Cleanup(ctx context.Context, cleanBundle bool) (*shimapi.DeleteResponse, error) {
+	return common.Cleanup(ctx, s.id, s.namespace, s.bundlePath, cleanBundle, s.logger)
 }
 
 func (s *Service) Done() <-chan struct{} {
@@ -244,17 +205,17 @@ func (s *Service) Serve(ctx context.Context, sigChan <-chan uint32) (err error) 
 		}
 	}
 
-	shutdown, err := s.serveTaskService(s.logger)
+	_, err = s.serveTaskService(s.logger)
 	if err != nil {
 		return err
 	}
 
-	go func() {
-		<-s.Done()
-		if err := shutdown(context.Background()); err != nil {
-			s.logger.WithError(err).Error("shutdown ttrpc service error")
-		}
-	}()
+	// go func() {
+	// 	<-s.Done()
+	// 	if err := shutdown(context.Background()); err != nil {
+	// 		s.logger.WithError(err).Error("shutdown ttrpc service error")
+	// 	}
+	// }()
 
 	go func() {
 		for sig := range sigChan {
@@ -273,8 +234,8 @@ func (s *Service) init(ctx context.Context) (err error) {
 		return err
 	}
 
-	if _, err := s.Cleanup(ctx); err != nil {
-		logrus.WithError(err).Error("Cleanup error")
+	status, err := s.statusManager.LockForStartShim(ctx)
+	if err != nil {
 		return err
 	}
 
@@ -286,8 +247,8 @@ func (s *Service) init(ctx context.Context) (err error) {
 		}
 	}()
 
-	status, err := s.statusManager.LockForStartShim(ctx)
-	if err != nil {
+	if _, err := s.Cleanup(ctx, false); err != nil {
+		logrus.WithError(err).Error("Cleanup error")
 		return err
 	}
 
@@ -529,7 +490,7 @@ func (s *Service) checkProcess(ctx context.Context, container *runc.Container, p
 		return
 	}
 
-	if s.disabled() {
+	if s.Disabled() {
 		s.logger.Info("SendEventContainerExit")
 		s.sender.SendEventExit(&eventstypes.TaskExit{
 			ContainerID: container.ID,
@@ -580,7 +541,7 @@ func (s *Service) cleanup(ctx context.Context) {
 	}
 
 	s.logger.Info("kill container success")
-	if !s.disabled() {
+	if !s.Disabled() {
 		s.close()
 	}
 }
@@ -735,7 +696,7 @@ func (s *Service) setDisabled() {
 	atomic.StoreUint32(&s.shimDisabled, 1)
 }
 
-func (s *Service) disabled() bool {
+func (s *Service) Disabled() bool {
 	return atomic.LoadUint32(&s.shimDisabled) == 1
 }
 

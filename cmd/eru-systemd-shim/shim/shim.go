@@ -223,7 +223,7 @@ func (s *ShimApp) deleteCommand(ctx context.Context, publisher *shim.RemoteEvent
 	if err != nil {
 		return err
 	}
-	response, err := service.Cleanup(ctx)
+	response, err := service.Cleanup(ctx, true)
 	if err != nil {
 		return err
 	}
@@ -383,6 +383,13 @@ func (s *ShimApp) startService(subscribe TermSignalSubscribe, logger *logrus.Ent
 		return err
 	}
 	<-service.Done()
+	if service.Disabled() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if _, err := service.Cleanup(ctx, true); err != nil {
+			logger.WithError(err).Error("cleanup error")
+		}
+	}
 
 	select {
 	case <-publisher.Done():

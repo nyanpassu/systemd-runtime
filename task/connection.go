@@ -23,95 +23,134 @@ const (
 	killTimeout  = time.Duration(10) * time.Second
 )
 
+type TaskServiceSubscribe struct {
+	service *TaskService
+	exit    *runtime.Exit
+}
+
 type ConnMng struct {
 	sync.Mutex
-	logger      *logrus.Entry
-	service     *TaskService
-	bundle      common.Bundle
-	exitStatus  *runtime.Exit
-	subscribers []chan<- *TaskService
+	cancelConn    CancelConn
+	disabled      bool
+	logger        *logrus.Entry
+	lastSubscribe TaskServiceSubscribe
+	bundle        common.Bundle
+	subscribers   []chan<- TaskServiceSubscribe
 }
 
 func (s *ConnMng) getService() *TaskService {
 	s.Lock()
 	defer s.Unlock()
 
-	return s.service
+	return s.lastSubscribe.service
 }
 
 // return error either task is paused or disabled
 func (s *ConnMng) getRunningService(ctx context.Context) (*TaskService, error) {
-	service := s.getService()
-	if service != nil {
-		return service, nil
+	s.Lock()
+	defer s.Unlock()
+
+	if s.lastSubscribe.service != nil {
+		return s.lastSubscribe.service, nil
 	}
 
-	status, err := s.bundle.Status(ctx)
-	if err != nil {
-		return nil, err
-	}
-	if status.Disabled {
+	if s.lastSubscribe.exit != nil {
 		return nil, ErrTaskIsKilled
 	}
 	return nil, ErrTaskIsPaused
 }
 
 // wait service connection, if service is exited, return exit status
-func (s *ConnMng) waitService(ctx context.Context) (*TaskService, *runtime.Exit, error) {
+func (s *ConnMng) subscribeService(ctx context.Context) (sub TaskServiceSubscribe, err error) {
 	ch := s.subscribe()
 
 	select {
 	case <-ctx.Done():
-		return nil, nil, ctx.Err()
+		return sub, ctx.Err()
+	case <-time.After(connTimeout):
+		return sub, ErrTaskIsPaused
 	case service := <-ch:
-		if service != nil {
-			return service, nil, nil
-		}
-
-		status, err := s.bundle.Status(ctx)
-		if err != nil {
-			return nil, nil, err
-		}
-		return nil, status.Exit, nil
+		return service, nil
 	}
 }
 
-func (s *ConnMng) waitRunningService(ctx context.Context) (*TaskService, error) {
-	service, exit, err := s.waitService(ctx)
+func (s *ConnMng) waitServiceConnected(ctx context.Context) (*TaskService, error) {
+	serviceSubscribe, err := s.subscribeService(ctx)
 	if err != nil {
 		return nil, err
 	}
-	if exit != nil {
+	if serviceSubscribe.exit != nil {
 		return nil, ErrTaskIsKilled
 	}
-	return service, nil
+	return serviceSubscribe.service, nil
 }
 
-// if force is true, then will not waiting for more connection to shim
-func (s *ConnMng) exit(exit *runtime.Exit) {
-	subscribers := func() []chan<- *TaskService {
+func (s *ConnMng) Disable() {
+	s.Lock()
+	defer s.Unlock()
+
+	s.disabled = true
+}
+
+func (s *ConnMng) Disabled(exit *runtime.Exit) {
+	subscribers := func() []chan<- TaskServiceSubscribe {
 		s.Lock()
 		defer s.Unlock()
 
-		s.exitStatus = exit
+		s.cancelConn.Cancel()
+
+		s.disabled = true
+		s.lastSubscribe = TaskServiceSubscribe{
+			exit: exit,
+		}
 		subscribers := s.subscribers
 		s.subscribers = nil
-
 		return subscribers
 	}()
 
 	for _, sub := range subscribers {
+		sub <- TaskServiceSubscribe{
+			exit: exit,
+		}
 		close(sub)
 	}
 }
 
-func (s *ConnMng) subscribe() <-chan *TaskService {
-	ch := make(chan *TaskService, 1)
+// func (s *ConnMng) exit(exit *runtime.Exit) {
+// 	subscribers := func() []chan<- *TaskService {
+// 		s.Lock()
+// 		defer s.Unlock()
+
+// 		s.exitStatus = exit
+// 		subscribers := s.subscribers
+// 		s.subscribers = nil
+
+// 		return subscribers
+// 	}()
+
+// 	for _, sub := range subscribers {
+// 		close(sub)
+// 	}
+// }
+
+func (s *ConnMng) subscribe() <-chan TaskServiceSubscribe {
+	ch := make(chan TaskServiceSubscribe, 1)
 	s.Lock()
 	defer s.Unlock()
 
-	if s.service != nil {
-		ch <- s.service
+	if s.lastSubscribe.service != nil {
+		ch <- TaskServiceSubscribe{
+			service: s.lastSubscribe.service,
+		}
+		close(ch)
+		return ch
+	}
+
+	if s.lastSubscribe.exit != nil {
+		ch <- TaskServiceSubscribe{
+			exit: s.lastSubscribe.exit,
+		}
+		close(ch)
 		return ch
 	}
 
@@ -119,19 +158,21 @@ func (s *ConnMng) subscribe() <-chan *TaskService {
 	return ch
 }
 
-func (s *ConnMng) resetService() {
+func (s *ConnMng) reset() {
 	s.Lock()
 	defer s.Unlock()
 
-	s.service = nil
+	s.lastSubscribe = TaskServiceSubscribe{}
 }
 
 func (s *ConnMng) setService(service *TaskService) {
-	subscribers := func() []chan<- *TaskService {
+	subscribers := func() []chan<- TaskServiceSubscribe {
 		s.Lock()
 		defer s.Unlock()
 
-		s.service = service
+		s.lastSubscribe = TaskServiceSubscribe{
+			service: service,
+		}
 		subscribers := s.subscribers
 		s.subscribers = nil
 
@@ -139,7 +180,9 @@ func (s *ConnMng) setService(service *TaskService) {
 	}()
 
 	for _, sub := range subscribers {
-		sub <- service
+		sub <- TaskServiceSubscribe{
+			service: service,
+		}
 		close(sub)
 	}
 }
@@ -147,6 +190,15 @@ func (s *ConnMng) setService(service *TaskService) {
 func (s *ConnMng) connect() {
 	retryCount := 0
 	for {
+		if func() bool {
+			s.Lock()
+			defer s.Unlock()
+
+			return s.disabled
+		}() {
+			return
+		}
+
 		status, running, err := s.bundle.ShimStatus(context.Background())
 		if err != nil {
 			logrus.WithError(err).Error("check shim status error")
@@ -159,7 +211,7 @@ func (s *ConnMng) connect() {
 			return
 		}
 		if status.Disabled && !running {
-			s.exit(status.Exit)
+			s.Disabled(status.Exit)
 			return
 		}
 		if s.doConnect(waitInterval, connTimeout) {
@@ -170,7 +222,8 @@ func (s *ConnMng) connect() {
 
 func (s *ConnMng) getAddr(timeout time.Duration) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
+	s.cancelConn.Set(cancel)
+	defer s.cancelConn.Cancel()
 
 	return common.ReceiveAddressOverFifo(ctx, s.bundle.Path())
 }
@@ -180,7 +233,7 @@ func (s *ConnMng) connOnAddr(timeout time.Duration, addr string) error {
 	defer cancel()
 
 	log.G(ctx).Debug("create shim connection")
-	conn, err := shim.Connect(addr, shim.AnonReconnectDialer)
+	conn, err := common.Connect(addr, shim.AnonReconnectDialer)
 	if err != nil {
 		return errors.WithMessage(err, "make shim connection failed")
 	}
@@ -224,8 +277,33 @@ func (s *ConnMng) doConnect(waitInterval time.Duration, connTimeout time.Duratio
 }
 
 func (s *ConnMng) reconnect() {
-	s.resetService()
+	s.reset()
+	err := s.bundle.Cleanup(context.Background())
+	if err != nil {
+		s.logger.WithError(err).Error("cleanup bundle error")
+	}
 
-	s.logger.WithField("id", s.bundle.ID()).Debug("ttrpc conn disconnected, reconnect")
+	s.logger.Debug("ttrpc conn disconnected, reconnect")
 	go s.connect()
+}
+
+type CancelConn struct {
+	sync.Mutex
+	cancel func()
+}
+
+func (c *CancelConn) Set(cancel func()) {
+	c.Lock()
+	defer c.Unlock()
+	c.cancel = cancel
+}
+
+func (c *CancelConn) Cancel() {
+	c.Lock()
+	defer c.Unlock()
+
+	if c.cancel != nil {
+		c.cancel()
+		c.cancel = nil
+	}
 }

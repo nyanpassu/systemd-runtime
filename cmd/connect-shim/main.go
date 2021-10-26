@@ -27,7 +27,7 @@ func main() {
 	id := getID()
 
 	log.Printf("create connection")
-	conn, err := shim.Connect(address, shim.AnonReconnectDialer)
+	conn, err := common.Connect(address, shim.AnonReconnectDialer)
 	if err != nil {
 		log.Fatalln(err)
 	}

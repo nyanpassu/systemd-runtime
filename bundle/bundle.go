@@ -3,8 +3,11 @@ package bundle
 import (
 	"context"
 	"os"
+	"time"
 
+	"github.com/containerd/containerd/api/events"
 	"github.com/containerd/containerd/log"
+	"github.com/containerd/containerd/namespaces"
 
 	"github.com/containerd/containerd/events/exchange"
 	"github.com/containerd/containerd/runtime"
@@ -24,6 +27,7 @@ type Bundle struct {
 	containerdAddress      string
 	containerdTTRPCAddress string
 	statusManager          *common.StatusManager
+	exchange               *exchange.Exchange
 }
 
 func (b *Bundle) ID() string {
@@ -38,8 +42,31 @@ func (b *Bundle) Namespace() string {
 	return b.namespace
 }
 
+func (b *Bundle) Cleanup(ctx context.Context) error {
+	status, locked, err := b.statusManager.LockForCleanup(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err := b.statusManager.ReleaseLocks(); err != nil {
+			log.G(ctx).WithError(err).Error("release locks error")
+		}
+	}()
+	if !locked {
+		return nil
+	}
+	if !status.Disabled {
+		log.G(ctx).Debug("publish pause event")
+		b.exchange.Publish(namespaces.WithNamespace(ctx, b.namespace), runtime.TaskPausedEventTopic, &events.TaskPaused{
+			ContainerID: b.ID(),
+		})
+	}
+	_, err = common.Cleanup(ctx, b.id, b.namespace, b.path, false, log.G(ctx))
+	return err
+}
+
 func (b *Bundle) Delete(context.Context) error {
-	return deletePath(b.path)
+	return common.DeleteBundlePath(b.path)
 }
 
 func (b *Bundle) SaveOpts(ctx context.Context, opts runtime.CreateOpts) error {
@@ -72,6 +99,13 @@ func (b *Bundle) Disable(ctx context.Context) (status common.ShimStatus, shimRun
 	}
 	newStatus := status
 	newStatus.Disabled = true
+	if !shimRunning && status.Exit == nil {
+		status.Exit = &runtime.Exit{
+			Pid:       uint32(status.PID),
+			Status:    0,
+			Timestamp: time.Now(),
+		}
+	}
 	return status, shimRunning, b.statusManager.UpdateStatus(ctx, newStatus)
 }
 
@@ -173,20 +207,17 @@ func (b *Bundle) ShimStatus(ctx context.Context) (status common.ShimStatus, shim
 			log.G(ctx).WithError(err).Error("unlock status file error")
 		}
 	}()
-	return status, shimRunning, nil
-}
-
-func (b *Bundle) Status(ctx context.Context) (status common.ShimStatus, err error) {
-	status, err = b.statusManager.GetStatus(ctx)
-	if err != nil {
-		return
-	}
-	defer func() {
-		if err := b.statusManager.UnlockStatusFile(); err != nil {
-			log.G(ctx).WithError(err).Error("unlock status file error")
+	if status.Disabled && status.Exit == nil {
+		status.Exit = &runtime.Exit{
+			Pid:       uint32(status.PID),
+			Status:    0,
+			Timestamp: time.Now(),
 		}
-	}()
-	return status, nil
+		if err := b.statusManager.UpdateStatus(ctx, status); err != nil {
+			log.G(ctx).WithError(err).Error("correct shim status error")
+		}
+	}
+	return status, shimRunning, nil
 }
 
 func (b *Bundle) recreateSystemdUnit(ctx context.Context) (*systemd.Unit, error) {

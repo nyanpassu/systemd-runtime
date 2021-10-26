@@ -6,6 +6,7 @@ import (
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
 
+	"github.com/containerd/containerd/api/events"
 	"github.com/containerd/containerd/events/exchange"
 	"github.com/containerd/containerd/runtime"
 
@@ -25,10 +26,11 @@ type Task struct {
 	unit   *systemd.Unit
 	logger *logrus.Entry
 
-	connMng ConnMng
+	connMng  ConnMng
+	exchange *exchange.Exchange
 }
 
-func NewTask(b common.Bundle, unit *systemd.Unit, _ *exchange.Exchange) runtime.Task {
+func NewTask(b common.Bundle, unit *systemd.Unit, exchange *exchange.Exchange) runtime.Task {
 	logger := logrus.NewEntry(logrus.StandardLogger()).WithField("id", b.ID()).WithField("namespace", b.Namespace())
 
 	t := &Task{
@@ -39,6 +41,7 @@ func NewTask(b common.Bundle, unit *systemd.Unit, _ *exchange.Exchange) runtime.
 			bundle: b,
 			logger: logger,
 		},
+		exchange: exchange,
 	}
 
 	go t.connMng.connect()
@@ -54,6 +57,11 @@ func (t *Task) ID() string {
 // State returns the process state
 func (t *Task) State(ctx context.Context) (state runtime.State, err error) {
 	t.logger.Debug("get task state")
+	defer func() {
+		if err == nil {
+			t.logger.Debug("task state = %s", StatusIntoString(state.Status))
+		}
+	}()
 
 	service := t.connMng.getService()
 	if service == nil {
@@ -102,21 +110,28 @@ func (t *Task) Kill(ctx context.Context, sig uint32, all bool) (err error) {
 	}
 
 	if !running {
-		t.connMng.exit(status.Exit)
+		t.connMng.Disabled(status.Exit)
+		t.exchange.Publish(ctx, runtime.TaskExitEventTopic, &events.TaskExit{
+			ID:          t.ID(),
+			ContainerID: t.ID(),
+			Pid:         0,
+			ExitStatus:  status.Exit.Status,
+			ExitedAt:    status.Exit.Timestamp,
+		})
 		return nil
 	}
-	t.connMng.exit(nil)
+	t.connMng.Disable()
 
 	logger.Debug("wait service")
-	service, exit, err := t.connMng.waitService(ctx)
+	sub, err := t.connMng.subscribeService(ctx)
 	if err != nil {
 		return err
 	}
-	if exit != nil {
+	if sub.exit != nil {
 		return nil
 	}
 
-	return service.Kill(ctx, sig, all)
+	return sub.service.Kill(ctx, sig, all)
 }
 
 // Pty resizes the processes pty/console
@@ -158,7 +173,7 @@ func (t *Task) Start(ctx context.Context) error {
 		return err
 	}
 
-	_, err := t.connMng.waitRunningService(ctx)
+	_, err := t.connMng.waitServiceConnected(ctx)
 	return err
 }
 
@@ -166,14 +181,14 @@ func (t *Task) Start(ctx context.Context) error {
 func (t *Task) Wait(ctx context.Context) (*runtime.Exit, error) {
 	t.logger.Debug("wait task exit")
 
-	service, exit, err := t.connMng.waitService(ctx)
+	sub, err := t.connMng.subscribeService(ctx)
 	if err != nil {
 		return nil, err
 	}
-	if exit != nil {
-		return exit, nil
+	if sub.exit != nil {
+		return sub.exit, nil
 	}
-	return service.Wait(ctx)
+	return sub.service.Wait(ctx)
 }
 
 // Delete deletes the process
@@ -181,7 +196,7 @@ func (t *Task) Delete(ctx context.Context) (exit *runtime.Exit, err error) {
 	logger := t.logger
 	logger.Debug("delete volatile task")
 
-	service, exit, err := t.connMng.waitService(ctx)
+	sub, err := t.connMng.subscribeService(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -200,10 +215,23 @@ func (t *Task) Delete(ctx context.Context) (exit *runtime.Exit, err error) {
 		}
 	}()
 
-	if exit != nil {
-		return exit, nil
+	if sub.exit != nil {
+		if err := t.bundle.Cleanup(ctx); err != nil {
+			t.logger.WithError(err).Error("cleanup bundle error")
+		}
+		if err := t.bundle.Delete(ctx); err != nil {
+			return nil, err
+		}
+		t.exchange.Publish(ctx, runtime.TaskDeleteEventTopic, &events.TaskDelete{
+			ID:          t.ID(),
+			ContainerID: t.ID(),
+			Pid:         0,
+			ExitStatus:  sub.exit.Status,
+			ExitedAt:    sub.exit.Timestamp,
+		})
+		return sub.exit, nil
 	}
-	return service.Delete(ctx)
+	return sub.service.Delete(ctx)
 }
 
 // PID of the process
