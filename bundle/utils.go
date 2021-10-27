@@ -162,7 +162,10 @@ func processSpec(bundle string, content []byte) ([]byte, error) {
 	if err := processRootfs(bundle, spec); err != nil {
 		return nil, err
 	}
-	spec.Hooks = nil
+	// docker network require a running dockerd, we don't support yet
+	if err := processNetworkNamespace(spec); err != nil {
+		return nil, err
+	}
 
 	content, err := json.Marshal(spec)
 	if err != nil {
@@ -170,6 +173,29 @@ func processSpec(bundle string, content []byte) ([]byte, error) {
 	}
 
 	return content, nil
+}
+
+func processNetworkNamespace(spec *specsGo.Spec) error {
+	if spec.Hooks != nil && spec.Hooks.Prestart != nil {
+		return errors.New("only support host network")
+	}
+
+	if spec.Linux == nil {
+		return nil
+	}
+
+	if spec.Linux.Sysctl != nil {
+		delete(spec.Linux.Sysctl, "net.ipv4.ip_unprivileged_port_start")
+	}
+
+	var namespaces []specsGo.LinuxNamespace
+	for _, ns := range spec.Linux.Namespaces {
+		if ns.Type != "network" {
+			namespaces = append(namespaces, ns)
+		}
+	}
+	spec.Linux.Namespaces = namespaces
+	return nil
 }
 
 func processRootfs(bundle string, spec *specsGo.Spec) error {
