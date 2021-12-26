@@ -87,9 +87,15 @@ func (t *Task) State(ctx context.Context) (state runtime.State, err error) {
 				Status: runtime.CreatedStatus,
 			}, nil
 		}
-		// other wise we return pasued
+		// other wise we return pasued, and we must return stdout here
+		opts, err := t.bundle.LoadOpts(ctx)
+		if err != nil {
+			return state, err
+		}
 		return runtime.State{
 			Status: runtime.PausedStatus,
+			Stdout: opts.IO.Stdout,
+			Stderr: opts.IO.Stderr,
 		}, nil
 	}
 

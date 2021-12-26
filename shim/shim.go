@@ -44,7 +44,6 @@ import (
 	"github.com/containerd/containerd/pkg/oom"
 	oomv1 "github.com/containerd/containerd/pkg/oom/v1"
 	oomv2 "github.com/containerd/containerd/pkg/oom/v2"
-	"github.com/containerd/containerd/pkg/process"
 	"github.com/containerd/containerd/pkg/stdio"
 	cruntime "github.com/containerd/containerd/runtime"
 	shimapi "github.com/containerd/containerd/runtime/v2/task"
@@ -56,6 +55,7 @@ import (
 	"github.com/containerd/ttrpc"
 
 	"github.com/projecteru2/systemd-runtime/common"
+	"github.com/projecteru2/systemd-runtime/process"
 	"github.com/projecteru2/systemd-runtime/runc"
 )
 
