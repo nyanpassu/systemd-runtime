@@ -9,10 +9,10 @@ import (
 	"golang.org/x/sys/unix"
 
 	"github.com/containerd/containerd/mount"
-	"github.com/containerd/containerd/pkg/process"
 	shimapi "github.com/containerd/containerd/runtime/v2/task"
 	goRunc "github.com/containerd/go-runc"
 
+	"github.com/projecteru2/systemd-runtime/process"
 	"github.com/projecteru2/systemd-runtime/runc"
 )
 

@@ -25,11 +25,12 @@ import (
 	"github.com/sirupsen/logrus"
 
 	"github.com/containerd/containerd/errdefs"
-	"github.com/containerd/containerd/pkg/process"
 	"github.com/containerd/containerd/runtime/v2/runc/options"
 	taskAPI "github.com/containerd/containerd/runtime/v2/task"
 	"github.com/containerd/typeurl"
 	ptypes "github.com/gogo/protobuf/types"
+
+	"github.com/projecteru2/systemd-runtime/process"
 )
 
 var (

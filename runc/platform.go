@@ -26,10 +26,11 @@ import (
 
 	"github.com/containerd/console"
 	"github.com/containerd/containerd/namespaces"
-	"github.com/containerd/containerd/pkg/process"
 	"github.com/containerd/containerd/pkg/stdio"
 	"github.com/containerd/fifo"
 	"github.com/pkg/errors"
+
+	"github.com/projecteru2/systemd-runtime/process"
 )
 
 var bufPool = sync.Pool{
@@ -197,3 +198,7 @@ func (p *linuxPlatform) ShutdownConsole(ctx context.Context, cons console.Consol
 func (p *linuxPlatform) Close() error {
 	return p.epoller.Close()
 }
+
+// func openFifo(ctx context.Context, fn string, flag int, perm os.FileMode) (io.ReadWriteCloser, error) {
+// 	return fifo.OpenFifo(ctx, fn, flag, perm)
+// }

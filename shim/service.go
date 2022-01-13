@@ -29,12 +29,12 @@ import (
 	eventstypes "github.com/containerd/containerd/api/events"
 	"github.com/containerd/containerd/api/types/task"
 	"github.com/containerd/containerd/errdefs"
-	"github.com/containerd/containerd/pkg/process"
 	"github.com/containerd/containerd/runtime"
 	"github.com/containerd/containerd/runtime/v2/runc/options"
 	"github.com/containerd/typeurl"
 	ptypes "github.com/gogo/protobuf/types"
 
+	"github.com/projecteru2/systemd-runtime/process"
 	"github.com/projecteru2/systemd-runtime/runc"
 )
 
