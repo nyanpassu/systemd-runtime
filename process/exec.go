@@ -38,6 +38,7 @@ import (
 	runc "github.com/containerd/go-runc"
 	specs "github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/pkg/errors"
+	"github.com/sirupsen/logrus"
 )
 
 type execProcess struct {
@@ -210,6 +211,7 @@ func (e *execProcess) start(ctx context.Context) (err error) {
 		close(e.waitBlock)
 		return e.parent.runtimeError(err, "OCI runtime exec failed")
 	}
+	logrus.Debugf("stdin = %s, socket is null? %t", e.stdio.Stdin, socket == nil)
 	if e.stdio.Stdin != "" {
 		if err := e.openStdin(e.stdio.Stdin); err != nil {
 			return err

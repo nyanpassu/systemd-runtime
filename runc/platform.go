@@ -198,7 +198,3 @@ func (p *linuxPlatform) ShutdownConsole(ctx context.Context, cons console.Consol
 func (p *linuxPlatform) Close() error {
 	return p.epoller.Close()
 }
-
-// func openFifo(ctx context.Context, fn string, flag int, perm os.FileMode) (io.ReadWriteCloser, error) {
-// 	return fifo.OpenFifo(ctx, fn, flag, perm)
-// }

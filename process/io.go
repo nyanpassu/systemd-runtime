@@ -103,6 +103,7 @@ func createIO(ctx context.Context, id string, ioUID, ioGID int, stdio stdio.Stdi
 		u.Scheme = "fifo"
 	}
 	pio.uri = u
+	logrus.Debugf("io scheme = %s", u.Scheme)
 	switch u.Scheme {
 	case "fifo":
 		pio.copy = true

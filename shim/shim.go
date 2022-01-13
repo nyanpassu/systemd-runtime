@@ -465,9 +465,11 @@ func (s *Service) checkProcess(ctx context.Context, container *runc.Container, p
 		s.logger.Debugf("process is not what we are looking for %v", e.Pid)
 		return false
 	}
+	s.logger.Debugf("process is what we are looking for %v", e.Pid)
 	matched = true
 
 	if ip, ok := p.(*process.Init); ok {
+		s.logger.Debugf("process is init process")
 		// Ensure all children are killed
 		if runc.ShouldKillAllOnExit(ctx, container.Bundle) {
 			if err := ip.KillAll(ctx); err != nil {
@@ -480,7 +482,7 @@ func (s *Service) checkProcess(ctx context.Context, container *runc.Container, p
 	p.SetExited(e.Status)
 
 	if e.Pid != container.Pid() {
-		s.logger.Info("SendEventExit")
+		s.logger.Infof("SendEventExit, pid = %d", e.Pid)
 		s.sender.SendEventExit(&eventstypes.TaskExit{
 			ContainerID: container.ID,
 			ID:          p.ID(),

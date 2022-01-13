@@ -21,4 +21,7 @@ import "errors"
 var (
 	// ErrFifoClosed .
 	ErrFifoClosed = errors.New("fifo closed")
+
+	// ErrFifoNotOpened .
+	ErrFifoNotOpened = errors.New("fifo not opened")
 )
