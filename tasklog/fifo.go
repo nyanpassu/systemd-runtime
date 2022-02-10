@@ -21,173 +21,163 @@ package tasklog
 
 import (
 	"io"
-	"os"
 	"sync"
-	"syscall"
 
-	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
 )
 
-type OnResetComplete func(io.Writer, ResetCloser)
-type ResetCloser interface {
-	io.Closer
-	Reset(OnResetComplete)
+type SelfRestoreFifo interface {
+	io.WriteCloser
+	Name() string
+	Signal() <-chan struct{}
 }
 
-func newFifoHolder(fn string, s OnResetComplete) (holder *fifoHolder, err error) {
-	if _, err := os.Stat(fn); err != nil {
-		if !os.IsNotExist(err) {
-			return nil, err
-		}
-		if err := syscall.Mkfifo(fn, 0); err != nil && !os.IsExist(err) {
-			return nil, errors.Wrapf(err, "error creating fifo %v", fn)
-		}
+func newFifo(fn string, makeFifoHandle func(string) (FifoHandle, error)) (SelfRestoreFifo, error) {
+	handle, err := makeFifoHandle(fn)
+	if err != nil {
+		return nil, err
 	}
-
-	holder = &fifoHolder{
-		fn:          fn,
-		subscribers: []OnResetComplete{s},
+	holder := &fifoHolder{
+		fn:             fn,
+		makeFifoHandle: makeFifoHandle,
 	}
-
-	go func() {
-		fifo, err := openFifo(holder.fn)
-		holder.set(fifo, err)
-	}()
+	go holder.syncOpenFifo(handle)
 
 	return holder, nil
 }
 
 type fifoHolder struct {
 	sync.Mutex
-	fn          string
-	closed      bool
-	fifo        io.WriteCloser
-	err         error
-	subscribers []OnResetComplete
+	fn             string
+	closed         bool
+	signalChs      []chan struct{}
+	fifo           io.WriteCloser
+	handle         FifoHandle
+	makeFifoHandle func(string) (FifoHandle, error)
 }
 
-func (holder *fifoHolder) get() (io.WriteCloser, error) {
+func (holder *fifoHolder) Signal() <-chan struct{} {
 	holder.Lock()
 	defer holder.Unlock()
-	return holder.fifo, holder.err
-}
 
-func (holder *fifoHolder) set(wc io.WriteCloser, err error) {
-	subscribers := func() []OnResetComplete {
-		holder.Lock()
-		defer holder.Unlock()
-		holder.fifo = wc
-		holder.err = err
+	ch := make(chan struct{})
+	holder.signalChs = append(holder.signalChs, ch)
 
-		subscibers := holder.subscribers
-		holder.subscribers = nil
-		return subscibers
-	}()
-	if err == nil {
-		for _, subscriber := range subscribers {
-			subscriber(wc, holder)
-		}
+	if holder.fifo != nil {
+		go func() {
+			ch <- struct{}{}
+		}()
 	}
+
+	return ch
 }
 
-func (holder *fifoHolder) holderClosed() bool {
+func (holder *fifoHolder) Name() string {
+	return holder.fn
+}
+
+func (holder *fifoHolder) Write(b []byte) (int, error) {
 	holder.Lock()
 	defer holder.Unlock()
 
-	return holder.closed
+	if holder.closed {
+		return 0, ErrFifoClosed
+	}
+
+	if holder.fifo == nil {
+		return 0, ErrFifoNotOpened
+	}
+
+	cnt, err := holder.fifo.Write(b)
+	if err != nil {
+		holder.unlockedReset()
+		return cnt, err
+	}
+
+	return cnt, nil
 }
 
-func (holder *fifoHolder) Reset(s OnResetComplete) {
-	holder.Lock()
-	defer holder.Unlock()
-
-	holder.subscribers = append(holder.subscribers, s)
-
+func (holder *fifoHolder) unlockedReset() {
 	fifo := holder.fifo
+	handle := holder.handle
 	holder.fifo = nil
-	holder.err = nil
+	holder.handle = nil
 
 	go func() {
-		var err error
-		if err = fifo.Close(); err != nil {
-			logrus.Errorf("close fifo error, cause: %v", err)
+		if err := fifo.Close(); err != nil {
+			logrus.Warnf("reset fifo holder, close fifo error, %s, cause = %v", holder.fn, err)
 		}
-		fifo, err = openFifo(holder.fn)
-		if holder.holderClosed() {
-			_ = fifo.Close()
+
+		if err := handle.Close(); err != nil {
+			logrus.Warnf("reset fifo holder, close handle error, %s, cause = %v", holder.fn, err)
+		}
+
+		handle, err := holder.makeFifoHandle(holder.fn)
+		if err != nil {
+			logrus.Errorf("reset fifo holder, get handle error, %s, cause = %v", holder.fn, err)
+			holder.Close()
 			return
 		}
-		holder.set(fifo, err)
+		holder.syncOpenFifo(handle)
 	}()
+}
+
+func (holder *fifoHolder) syncOpenFifo(handle FifoHandle) {
+	fifo, err := handle.OpenFifo()
+	if err != nil {
+		logrus.Errorf("open fifo error, %s, cause = %v", holder.fn, err)
+		_ = handle.Close()
+		_ = holder.Close()
+		return
+	}
+	holder.Lock()
+	defer holder.Unlock()
+
+	if holder.closed {
+		logrus.Warnf("fifo holder is closed, closed opened fifo, %s", holder.fn)
+		_ = fifo.Close()
+		_ = handle.Close()
+		return
+	}
+
+	holder.handle = handle
+	holder.fifo = fifo
+	for _, ch := range holder.signalChs {
+		ch <- struct{}{}
+	}
 }
 
 func (holder *fifoHolder) Close() error {
 	holder.Lock()
 	defer holder.Unlock()
 
+	return holder.unlockedClose()
+}
+
+func (holder *fifoHolder) unlockedClose() error {
 	if holder.closed {
 		return nil
 	}
+	logrus.Debugf("closing fifoholder, %s", holder.fn)
 
-	holder.subscribers = nil
 	holder.closed = true
-	holder.err = ErrFifoClosed
-	if holder.fifo != nil {
-		_ = holder.fifo.Close()
+
+	fifo := holder.fifo
+	holder.fifo = nil
+
+	for _, ch := range holder.signalChs {
+		close(ch)
 	}
 
-	return nil
-}
-
-func openFifo(fn string) (f *fifo, err error) {
-	logrus.Debugf("open fifo for task log %s", fn)
-	var (
-		handle *handle
-		path   string
-	)
-	handle, err = getHandle(fn)
-	if err != nil {
-		logrus.Errorf("get fifo handle for task log error, %s, cause = %v", fn, err)
-		return nil, err
+	if fifo != nil {
+		go func() {
+			// we returned nil from close, so we will print error to stderr
+			if err := fifo.Close(); err != nil {
+				logrus.Errorf("close fifo error, %s, cause = %v", holder.fn, err)
+			}
+			logrus.Debugf("close fifo success, %s", holder.fn)
+		}()
 	}
 
-	defer func() {
-		if err != nil {
-			logrus.Errorf("open fifo for task log error, %s, cause = %v", fn, err)
-			_ = handle.Close()
-		}
-	}()
-	path, err = handle.Path()
-	if err != nil {
-		return nil, err
-	}
-
-	file, err := os.OpenFile(path, syscall.O_WRONLY, 0)
-	if err != nil {
-		return nil, err
-	}
-	logrus.Debugf("open fifo for task log success %s", fn)
-	return &fifo{
-		file:    file,
-		handler: handle,
-	}, nil
-}
-
-type fifo struct {
-	once    sync.Once
-	file    *os.File
-	handler *handle
-}
-
-func (f *fifo) Write(b []byte) (int, error) {
-	return f.file.Write(b)
-}
-
-func (f *fifo) Close() error {
-	_ = f.handler.Close()
-	f.once.Do(func() {
-		_ = f.file.Close()
-	})
 	return nil
 }

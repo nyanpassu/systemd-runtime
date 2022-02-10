@@ -69,8 +69,8 @@ func (s *TaskService) Start(ctx context.Context, r *taskAPI.StartRequest) (*task
 
 // Delete the initial process and container
 func (s *TaskService) Delete(ctx context.Context, r *taskAPI.DeleteRequest) (_ *taskAPI.DeleteResponse, err error) {
-	s.logger.Debug("[ShimTaskService Delete]")
-	defer s.logger.Debug("Done [ShimTaskService Delete]")
+	s.logger.Debugf("[ShimTaskService Delete] Request(ID=%v, ExecID=%v)", r.ID, r.ExecID)
+	defer s.logger.Debugf("Done [ShimTaskService Delete] Request(ID=%v, ExecID=%v)", r.ID, r.ExecID)
 
 	exitStatus, exitedAt, pid, err := s.service.Delete(ctx, r.ExecID)
 	if err != nil {

@@ -181,11 +181,11 @@ func (s *App) run() error {
 	defer publisher.Close()
 
 	logger := logrus.WithFields(logrus.Fields{
-		"id":        s.id,
-		"pid":       os.Getpid(),
-		"path":      s.bundlePath,
-		"namespace": s.namespace,
-		"runtime":   shimID,
+		// "id":        s.id,
+		"pid": os.Getpid(),
+		// "path":      s.bundlePath,
+		// "namespace": s.namespace,
+		// "runtime":   shimID,
 	})
 	// for now we don't have a shim create timeout
 
